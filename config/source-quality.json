@@ -1,0 +1,14 @@
+{
+  "sec": 1.0,
+  "government": 0.95,
+  "company_official": 0.9,
+  "academic": 0.9,
+  "patent": 0.9,
+  "etf_sponsor": 0.9,
+  "index_provider": 0.9,
+  "media": 0.75,
+  "press_release": 0.6,
+  "social": 0.35,
+  "forum": 0.25,
+  "unknown": 0.3
+}

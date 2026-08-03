@@ -1,0 +1,75 @@
+import { expect, test, type Page } from "@playwright/test";
+
+const request = { topic:"机器人",objective:"discover_emerging_themes",sources:["arxiv"],timeRange:"90d",outputType:"theme_report" };
+function run(status:string,stage:string,progress:number){return {run_id:"run-e2e",status,stage,progress,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),request,result:{theme_definition:{theme_id:"robotics",name:"机器人",description:"机器人产业采用研究",aliases:["robotics"],research_questions:["采用？","反方？","覆盖？"],model_used:false}},approvals:[],agent_runs:[],tool_calls:[],steps:[]};}
+async function mockResearchApi(page:Page){
+  let status="awaiting_theme_review"; let stage="theme_review"; let progress=12;
+  await page.route("**/api/dashboard",route=>route.fulfill({json:{runs:[]}}));
+  await page.route("**/api/capabilities",route=>route.fulfill({json:{connectors:[],llm:{configured:false},playwright_mcp:{configured:false},output_types:{theme_report:true,quick_scan:true,etf_opportunity_analysis:true}}}));
+  await page.route("**/api/research-runs",async route=>{
+    if(route.request().method()==="GET")return route.fulfill({json:{runs:[],total:0,limit:50,offset:0,has_more:false}});
+    return route.fulfill({status:202,json:{run_id:"run-e2e"}});
+  });
+  await page.route("**/api/research-runs/run-e2e/stream",async route=>{if(status==="queued"){status="awaiting_report_review";stage="report_review";progress=92;}const body=`event: run_snapshot\ndata: ${JSON.stringify(run(status,stage,progress))}\n\n`;await route.fulfill({contentType:"text/event-stream",body});});
+  await page.route("**/api/research-runs/run-e2e/theme-review",async route=>{status="queued";stage="collecting";progress=15;await route.fulfill({json:run(status,stage,progress)});});
+  await page.route("**/api/research-runs/run-e2e/report-review",async route=>{const payload=route.request().postDataJSON();status=payload.decision==="return"?"returned":"completed";stage=status==="returned"?"report_review":"completed";progress=status==="completed"?100:92;await route.fulfill({json:run(status,stage,progress)});});
+  await page.route("**/api/research-runs/run-e2e/rerun",async route=>{status="queued";stage="collecting";progress=15;await route.fulfill({json:{run_id:"run-e2e",status:"queued"}});});
+  await page.route("**/api/research-runs/run-e2e",async route=>route.fulfill({json:run(status,stage,progress)}));
+}
+
+test("主题确认、报告退回、重跑与通过",async({page})=>{
+  await mockResearchApi(page); await page.goto("/research");
+  await expect(page.locator("select")).toHaveCount(0);
+  await expect(page.getByRole("button",{name:/发现新兴主题/})).toBeVisible();
+  await expect(page.getByRole("button",{name:/主题研究 Theme Research/})).toHaveAttribute("aria-pressed","true");
+  await expect(page.getByRole("button",{name:/SEC ETF 注册与公司文件/})).toBeVisible();
+  await page.getByLabel("研究主题").fill("机器人");
+  await page.getByRole("button",{name:/开始研究/}).click();
+  await expect(page.getByRole("button",{name:"通过并继续"})).toBeVisible();
+  await page.getByRole("button",{name:"通过并继续"}).click();
+  await expect(page.getByText("报告已生成，等待你的复核")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button",{name:"退回"}).last().click();
+  await page.getByRole("textbox",{name:"复核备注"}).fill("补充独立反方来源");
+  await page.getByRole("button",{name:"确认退回"}).click();
+  await expect(page.getByRole("button",{name:/重新运行/})).toBeVisible();
+  await page.getByRole("button",{name:/重新运行/}).click();
+  await expect(page.getByText("报告已生成，等待你的复核")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button",{name:"通过报告"}).click();
+  await expect(page.getByRole("link",{name:/进入报告库/})).toBeVisible();
+});
+
+test("旧版任务列表接口给出明确重启提示",async({page})=>{
+  await page.route("**/api/research-runs?**",route=>route.fulfill({status:405,headers:{Allow:"POST"},json:{detail:"Method Not Allowed"}}));
+  await page.route("**/api/capabilities",route=>route.fulfill({json:{connectors:[],output_types:{theme_report:true,quick_scan:true,etf_opportunity_analysis:true}}}));
+  await page.goto("/research");
+  await expect(page.getByText("当前运行的是旧版 API，请关闭旧服务并重新启动 ETF 主题雷达。")).toBeVisible();
+});
+
+test("任务详情瞬时断线会重试且不触发运行时异常",async({page})=>{
+  let detailRequests=0;
+  const pageErrors:string[]=[];
+  page.on("pageerror",error=>pageErrors.push(error.message));
+  await page.route("**/api/capabilities",route=>route.fulfill({json:{connectors:[],output_types:{theme_report:true,quick_scan:true,etf_opportunity_analysis:true}}}));
+  await page.route("**/api/research-runs?**",route=>route.fulfill({json:{runs:[{run_id:"run-e2e",topic:"机器人",status:"completed",stage:"completed",progress:100,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),needs_attention:false,output_type:"theme_report"}],total:1,limit:50,offset:0,has_more:false}}));
+  await page.route("**/api/research-runs/run-e2e",async route=>{
+    detailRequests+=1;
+    if(detailRequests===1)return route.abort("connectionreset");
+    return route.fulfill({json:run("completed","completed",100)});
+  });
+  await page.goto("/research");
+  await page.getByRole("button",{name:/机器人/}).click();
+  await expect(page.getByText("研究任务已完成")).toBeVisible();
+  expect(detailRequests).toBe(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test("报告可从资料库归档",async({page})=>{
+  let archived=false;
+  const asset=()=>({report_id:"report:run-e2e",run_id:"run-e2e",title:"机器人主题研究",kind:"theme_report",theme_id:"robotics",folder_id:"robotics",status:archived?"archived":"watch",tags:["机器人"],summary:"可审计研究报告",updated_at:new Date().toISOString(),created_at:new Date().toISOString(),version:1,source_count:3,evidence_count:8,audit_passed:true});
+  await page.route("**/api/reports?**",route=>route.fulfill({json:{reports:archived?[]:[asset()],total_before_filters:1,active_count:archived?0:1,archived_count:archived?1:0,folders:[{id:"ai",report_count:0},{id:"energy",report_count:0},{id:"robotics",report_count:archived?0:1},{id:"healthcare",report_count:0}]}}));
+  await page.route("**/api/reports/report%3Arun-e2e",async route=>{archived=true;await route.fulfill({json:asset()});});
+  await page.goto("/reports");
+  await expect(page.getByText("机器人主题研究")).toBeVisible();
+  await page.getByRole("button",{name:"归档 机器人主题研究"}).click();
+  await expect(page.getByText("报告已归档，可通过“已归档”筛选查看。")).toBeVisible();
+});

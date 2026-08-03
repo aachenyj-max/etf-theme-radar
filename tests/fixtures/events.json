@@ -1,0 +1,6 @@
+[
+  {"id":"sec-1","document":{"source":"SEC EDGAR","source_url":"https://www.sec.gov/Archives/example","title":"Example ETF filing","text":"New ETF registration describes edge AI infrastructure exposure.","source_type":"official","published_at":"2025-01-10T00:00:00+00:00"}},
+  {"id":"paper-1","document":{"source":"OpenAlex fixture","source_url":"https://openalex.org/W123","title":"Efficient edge AI systems","text":"Research activity and institutions expand around edge AI hardware.","source_type":"academic","published_at":"2025-01-11T00:00:00+00:00"}},
+  {"id":"patent-1","document":{"source":"USPTO fixture","source_url":"https://patents.example/1","title":"Edge inference accelerator","text":"Patent application for low-power inference accelerator.","source_type":"patent","published_at":"2025-01-12T00:00:00+00:00"}}
+]
+

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>S&amp;P Dow Jones Indices - Index News &amp; Announcements RSS Feed</title>
+    <item>
+      <title>S&amp;P AI Infrastructure Index Methodology Update</title>
+      <link>https://www.spglobal.com/spdji/en/documents/example.pdf</link>
+      <description><![CDATA[S&amp;P DJI will update the AI infrastructure index at the September rebalancing.]]></description>
+      <pubDate>Wed, 29 Jul 2026 17:15:00 EDT</pubDate>
+      <guid isPermaLink="false">sp-example-1</guid>
+      <category>Equity</category>
+      <category>Americas</category>
+    </item>
+  </channel>
+</rss>

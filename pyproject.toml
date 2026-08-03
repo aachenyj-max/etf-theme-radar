@@ -1,0 +1,24 @@
+[project]
+name = "etf-theme-radar"
+version = "0.1.0"
+description = "Evidence-first ETF theme research MVP"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "mcp>=1.0,<3",
+    "pydantic-ai-slim[openai]>=1.0,<2",
+    "yfinance>=0.2.66,<2",
+]
+
+[project.scripts]
+etf-radar = "etf_theme_radar.cli:main"
+
+[tool.setuptools]
+packages = ["etf_theme_radar"]
+
+[tool.setuptools.package-data]
+etf_theme_radar = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

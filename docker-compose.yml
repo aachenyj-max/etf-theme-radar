@@ -1,0 +1,9 @@
+services:
+  radar:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      SEC_ENABLED: "false"
+    volumes:
+      - ./data:/app/data
+

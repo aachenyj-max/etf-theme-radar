@@ -1,0 +1,6 @@
+interface:
+  display_name: "ETF Theme Research"
+  short_description: "Auditable ETF theme definitions, evidence, and reports"
+  default_prompt: "Use $etf-theme-research to define and research an ETF theme with auditable evidence."
+policy:
+  allow_implicit_invocation: false

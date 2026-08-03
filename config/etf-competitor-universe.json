@@ -1,0 +1,20 @@
+[
+  {"ticker":"AIQ","category":"人工智能与大数据","issuer":"Global X","theme_tags":["ai","artificial intelligence","人工智能"],"holdings_url":"https://www.globalxetfs.com/funds/AIQ","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"BOTZ","category":"机器人与人工智能","issuer":"Global X","theme_tags":["robotics","robot","机器人","ai"],"holdings_url":"https://www.globalxetfs.com/funds/BOTZ","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"ROBO","category":"机器人与自动化","issuer":"ROBO Global","theme_tags":["robotics","robot","机器人","automation"],"holdings_url":"https://www.roboglobaletfs.com/robo","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"IRBO","category":"机器人与人工智能","issuer":"iShares","theme_tags":["robotics","robot","机器人","ai"],"holdings_url":"https://www.ishares.com/us/products/297905/ishares-robotics-and-artificial-intelligence-multisector-etf-fund","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"ARKQ","category":"自主技术与机器人","issuer":"ARK Invest","theme_tags":["robotics","robot","机器人","autonomous technology"],"holdings_url":"https://www.ark-funds.com/funds/arkq","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"WTAI","category":"人工智能","issuer":"WisdomTree","theme_tags":["ai","artificial intelligence","人工智能"],"holdings_url":"https://www.wisdomtree.com/us/products/megatrends/wtai","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"THNQ","category":"人工智能","issuer":"ROBO Global","theme_tags":["ai","artificial intelligence","人工智能"],"holdings_url":"https://www.roboglobaletfs.com/thnq","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"SMH","category":"半导体","issuer":"VanEck","theme_tags":["semiconductor","chip","半导体","ai infrastructure"],"holdings_url":"https://www.vaneck.com/us/en/investments/semiconductor-etf-smh/","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"SOXX","category":"半导体","issuer":"iShares","theme_tags":["semiconductor","chip","半导体","ai infrastructure"],"holdings_url":"https://www.ishares.com/us/products/239705/SOXX","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"SOXQ","category":"半导体","issuer":"Invesco","theme_tags":["semiconductor","chip","半导体","ai infrastructure"],"holdings_url":"https://www.invesco.com/us/financial-products/etfs/product-detail?productId=ETF-SOXQ","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"XSD","category":"半导体","issuer":"SPDR","theme_tags":["semiconductor","chip","半导体"],"holdings_url":"https://www.ssga.com/us/en/individual/etfs/state-street-spdr-sp-semiconductor-etf-xsd","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"SKYY","category":"云计算","issuer":"First Trust","theme_tags":["cloud","云计算","ai infrastructure"],"holdings_url":"https://www.ftportfolios.com/Retail/Etf/EtfSummary.aspx?Ticker=SKYY","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"CLOU","category":"云计算","issuer":"Global X","theme_tags":["cloud","云计算","ai infrastructure"],"holdings_url":"https://www.globalxetfs.com/funds/CLOU","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"SRVR","category":"数据中心基础设施","issuer":"Pacer","theme_tags":["data center","数据中心","ai infrastructure"],"holdings_url":"https://www.paceretfs.com/products/srvr","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"HACK","category":"网络安全","issuer":"Amplify","holdings_url":"https://amplifyetfs.com/hack/","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"CIBR","category":"网络安全","issuer":"First Trust","holdings_url":"https://www.ftportfolios.com/Retail/Etf/EtfSummary.aspx?Ticker=CIBR","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"LIT","category":"电池与储能","issuer":"Global X","holdings_url":"https://www.globalxetfs.com/funds/LIT","holdings_format":"html","holdings_status":"已配置发行人官方页面"},
+  {"ticker":"TAN","category":"太阳能","issuer":"Invesco","holdings_url":"https://www.invesco.com/us/financial-products/etfs/product-detail?productId=ETF-TAN","holdings_format":"html","holdings_status":"已配置发行人官方页面"}
+]

@@ -1,0 +1,42 @@
+theme_scoring:
+  research_momentum: 0.20
+  patent_momentum: 0.15
+  hiring_momentum: 0.15
+  corporate_adoption: 0.15
+  capital_market_momentum: 0.10
+  investable_universe_quality: 0.10
+  product_white_space: 0.10
+  evidence_diversity: 0.05
+penalties:
+  hype: 0.10
+  crowding: 0.10
+  concentration: 0.10
+  data_quality: 0.10
+minimum_evidence:
+  independent_source_types: 3
+  official_sources: 1
+  listed_companies: 15
+index_constraints:
+  constituent_count_min: 25
+  constituent_count_max: 50
+  max_security_weight: 0.08
+  max_top_10_weight: 0.50
+agent_runtime:
+  max_tool_calls: 12
+  max_model_requests: 6
+  max_seconds: 480
+  etf_fast_max_tool_calls: 8
+  etf_fast_max_model_requests: 4
+  etf_fast_max_seconds: 240
+  max_total_tokens: 24000
+  max_cost_usd: 0.50
+  estimated_cost_per_million_tokens: 2.00
+  consecutive_no_evidence_limit: 2
+etf_market:
+  minimum_verified_etfs: 2
+  cache_ttl_seconds: 1800
+  volatility_window_days: 63
+  drawdown_window_days: 63
+  average_volume_window_days: 20
+  bullish_return_1m: 0.03
+  bearish_return_1m: -0.03
