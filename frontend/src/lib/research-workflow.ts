@@ -1,8 +1,4 @@
-export type ResearchObjective =
-  | "discover_emerging_themes"
-  | "analyze_etf_landscape"
-  | "track_industry_momentum"
-  | "build_investment_thesis";
+export type ResearchObjective = "analyze_etf_landscape_and_track_industry_momentum";
 
 export type IntelligenceSourceId =
   | "sec"
@@ -15,8 +11,8 @@ export type IntelligenceSourceId =
   | "x"
   | "forums";
 
-export type ResearchTimeRange = "30d" | "90d" | "1y" | "custom";
-export type ResearchOutputType = "quick_scan" | "theme_report" | "etf_opportunity_analysis";
+export type ResearchTimeRange = "multi_horizon";
+export type ResearchOutputType = "theme_report";
 
 export interface CustomDateRange {
   from: string;
@@ -25,6 +21,7 @@ export interface CustomDateRange {
 
 export interface ResearchDraft {
   topic: string;
+  theme?: string;
   objective: ResearchObjective;
   sources: IntelligenceSourceId[];
   timeRange: ResearchTimeRange;
@@ -103,6 +100,18 @@ export interface ResearchRunRecord extends ResearchRunSnapshot {
     theme_definition?: { theme_id: string; name: string; description: string; aliases: string[]; research_questions: string[]; model_used: boolean };
     available_actions?: string[];
     report_markdown?: string;
+    conclusion?: {
+      verdict: "supported" | "mixed" | "insufficient";
+      confidence: "high" | "medium" | "low";
+      statement: string;
+      evidence_gaps?: Array<{ area: string; gap: string; why_missing: string; impact: string; next_action: string; status: string }>;
+    };
+    report_sections?: {
+      scenarios?: Array<{ id: string; label: string; industry_path: string; etf_implication: string }>;
+      scorecard?: Array<{ id: string; label: string; stars: number | null; status: string; reason: string }>;
+      evidence_gaps?: Array<{ area: string; gap: string; why_missing: string; impact: string; next_action: string; status: string }>;
+    };
+    audit?: { passed?: boolean; publication_gate?: { passed?: boolean; failed_checks?: string[] } };
   };
   agentRuns?: AgentRunAudit[];
   toolCalls?: ToolCallAudit[];
@@ -152,7 +161,7 @@ export const allowedResearchTransitions: Record<ResearchRunState, ResearchRunSta
   submitting: ["planning", "queued", "failed"],
   waiting: ["planning", "cancelled"],
   planning: ["awaiting_theme_review", "failed"],
-  awaiting_theme_review: ["queued", "returned", "cancelled"],
+  awaiting_theme_review: ["waiting", "returned", "cancelled"],
   queued: ["collecting", "failed"],
   collecting: ["governing", "failed"],
   governing: ["analyzing", "failed"],
@@ -160,7 +169,7 @@ export const allowedResearchTransitions: Record<ResearchRunState, ResearchRunSta
   auditing: ["awaiting_report_review", "failed"],
   awaiting_report_review: ["completed", "returned", "cancelled"],
   completed: [],
-  returned: ["planning", "queued"],
+  returned: ["waiting"],
   cancelled: [],
   failed: [],
   blocked_configuration: []
@@ -173,14 +182,6 @@ export function canTransitionResearchRun(from: ResearchRunState, to: ResearchRun
 export function validateResearchDraft(draft: ResearchDraft) {
   const errors: Partial<Record<"topic" | "sources" | "customDateRange", string>> = {};
   if (draft.topic.trim().length < 2) errors.topic = "请输入至少两个字符的研究主题。";
-  if (draft.sources.length === 0) errors.sources = "请至少选择一个情报来源。";
-  if (draft.timeRange === "custom") {
-    if (!draft.customDateRange?.from || !draft.customDateRange?.to) {
-      errors.customDateRange = "请选择完整的开始和结束日期。";
-    } else if (draft.customDateRange.from > draft.customDateRange.to) {
-      errors.customDateRange = "开始日期不能晚于结束日期。";
-    }
-  }
   return errors;
 }
 

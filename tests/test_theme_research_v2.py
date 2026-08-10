@@ -61,3 +61,18 @@ def test_key_evidence_cards_have_urls_and_do_not_repeat_publishers(tmp_path: Pat
     assert len({card["publisher"] for card in cards}) == 5
     assert sum(card["event_kind"] == "jobs" for card in cards) <= 1
     store.close()
+
+
+def test_report_has_structured_scenarios_scorecard_and_explained_gaps(tmp_path: Path):
+    store = EvidenceStore(tmp_path / "structured.db")
+    for number, publisher in enumerate(("a.example", "b.example", "c.example")):
+        store.save_event(_event(str(number), publisher=publisher))
+    store.commit()
+    result = run_theme_research(store, "ai-infrastructure", tmp_path / "report")
+    sections = result["report_sections"]
+    assert len(sections["scenarios"]) == 3
+    assert len(sections["scorecard"]) == 7
+    assert all(item["stars"] is None or 1 <= item["stars"] <= 5 for item in sections["scorecard"])
+    assert all(item["why_missing"] and item["impact"] and item["next_action"] for item in sections["evidence_gaps"])
+    assert "为什么影响判断" in result["report_markdown"]
+    store.close()

@@ -1,4 +1,4 @@
-import type { MemoCitation, ReportDetailGateway, ReportMemoDetail } from "@/lib/report-detail";
+import type { MemoCitation, ReportDetailGateway, ReportMemoDetail, ReportVersionComparison, ReportVersionSummary } from "@/lib/report-detail";
 import { mockReportLibraryGateway } from "@/services/report-library-gateway";
 
 const sourceLogos = {
@@ -204,19 +204,32 @@ export const mockReportDetailGateway: ReportDetailGateway = {
     const asset = await mockReportLibraryGateway.getReport(reportId);
     return asset.id === "report_ai_infrastructure" ? buildAiMemo(asset) : buildFallbackMemo(asset);
   },
+  async getTimeline(reportId) { return { report_id: reportId, versions: [] }; },
+  async compareVersions(reportId, left, right) { return { report_id: reportId, left, right, added: [], removed: [], unchanged_count: 0, structured: { conclusion: { before: "", after: "", changed: false }, score_changes: [], etfs_added: [], etfs_removed: [], evidence_gaps_added: [], evidence_gaps_closed: [], evidence_count_before: 0, evidence_count_after: 0 } }; },
   async refreshMarketSnapshot() { return { runId: "mock-market-refresh" }; }
 };
 
 export function createHttpReportDetailGateway(baseUrl: string): ReportDetailGateway {
   return {
-    async getReportDetail(reportId) {
-      const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/detail`, { headers: { Accept: "application/json" } });
+    async getReportDetail(reportId, version) {
+      const query = version ? `?version=${version}` : "";
+      const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/detail${query}`, { headers: { Accept: "application/json" } });
       if (!response.ok) {
         const error = new Error(response.status === 404 ? "报告不存在或已经删除。" : `报告详情接口返回 ${response.status}`) as Error & { status?: number };
         error.status = response.status;
         throw error;
       }
       return await response.json() as ReportMemoDetail;
+    },
+    async getTimeline(reportId) {
+      const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/timeline`, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`报告时间线接口返回 ${response.status}`);
+      return await response.json() as { report_id: string; versions: ReportVersionSummary[] };
+    },
+    async compareVersions(reportId, left, right) {
+      const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/compare?left=${left}&right=${right}`, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`报告版本比较接口返回 ${response.status}`);
+      return await response.json() as ReportVersionComparison;
     },
     async refreshMarketSnapshot(reportId) {
       const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/market-snapshot`, { method: "POST" });

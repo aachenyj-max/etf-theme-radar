@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { MemoCitation, MemoConfidence, MemoDecisionStatus, ReportDetailLoadState, ReportMemoDetail } from "@/lib/report-detail";
+import type { EtfMarketProduct, MemoCitation, MemoConfidence, MemoDecisionStatus, ReportDetailLoadState, ReportMemoDetail, ReportVersionComparison, ReportVersionSummary } from "@/lib/report-detail";
 import { reportDetailGateway } from "@/services/report-detail-gateway";
 import { cn } from "@/lib/utils";
 import { labelFor, sourceTypeLabels } from "@/lib/ui-labels";
@@ -178,9 +178,9 @@ function SourceLogo({ name, logoUrl, fallback }: { name: string; logoUrl: string
   </span>;
 }
 
-function CitationPanel({ citations, report, refreshing, refreshError, onRefresh }: {
+function CitationPanel({ citations, report, refreshing, refreshStatus, refreshError, onRefresh }: {
   citations: MemoCitation[]; report: ReportMemoDetail; refreshing: boolean;
-  refreshError: string; onRefresh: () => void;
+  refreshStatus: string; refreshError: string; onRefresh: () => void;
 }) {
   const snapshot = report.latestMarketSnapshot ?? {
     origin: report.etfLandscape.products?.length ? "legacy_report_snapshot" as const : "unavailable" as const,
@@ -194,7 +194,7 @@ function CitationPanel({ citations, report, refreshing, refreshError, onRefresh 
       <div className="overflow-hidden rounded-2xl border border-line bg-ink text-paper shadow-card">
         <div className="flex items-center justify-between border-b border-paper/10 px-5 py-4">
           <div><p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-[#8FD5C7]">ETF now</p><h2 className="mt-1 text-base font-semibold">ETF 现状</h2></div>
-          <Button size="sm" variant="ghost" className="text-paper hover:bg-paper/10 hover:text-paper" disabled={refreshing} onClick={onRefresh}><RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />刷新</Button>
+          <Button size="sm" variant="ghost" className="text-paper hover:bg-paper/10 hover:text-paper" disabled={refreshing} onClick={onRefresh}><RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />{refreshing ? "刷新中" : "刷新"}</Button>
         </div>
         <div className="px-5 py-4">
           <div className="flex items-center justify-between text-[10px] text-paper/55">
@@ -206,9 +206,10 @@ function CitationPanel({ citations, report, refreshing, refreshError, onRefresh 
             return <div key={product.ticker} className="grid grid-cols-[48px_1fr_auto] items-center gap-2 py-3 text-xs">
               <span className="font-mono font-semibold text-paper">{product.ticker}</span>
               <div><p className="font-semibold text-paper/90">{product.last_close === undefined ? "暂不可用" : formatMoney(product.last_close, product.currency)}</p><p className="mt-0.5 text-[9px] text-paper/45">{stale ? "缓存数据" : product.as_of ? formatDate(product.as_of) : "日期未知"}</p></div>
-              <div className="text-right"><p className={cn("font-semibold", (product.returns?.["1m"] ?? 0) > 0 ? "text-[#8FD5C7]" : (product.returns?.["1m"] ?? 0) < 0 ? "text-red-300" : "text-paper/75")}>{formatPercent(product.returns?.["1m"])}</p><p className="mt-0.5 text-[9px] text-paper/45">{product.activity_trend === "higher" ? "活跃度升温" : product.activity_trend === "lower" ? "活跃度降温" : "活跃度平稳"}</p></div>
+              <div className="text-right"><p className={cn("font-semibold", (product.returns?.["1m"] ?? 0) > 0 ? "text-[#8FD5C7]" : (product.returns?.["1m"] ?? 0) < 0 ? "text-red-300" : "text-paper/75")}>{formatPercent(product.returns?.["1m"])}</p><p className="mt-0.5 text-[9px] text-paper/45">{!availableMarketProduct(product) ? "行情未返回" : product.activity_trend === "higher" ? "活跃度升温" : product.activity_trend === "lower" ? "活跃度降温" : "活跃度平稳"}</p></div>
             </div>;
           })}</div> : <p className="mt-4 text-xs leading-5 text-paper/55">暂无成功行情快照。手动刷新后会在此显示，且不会改变报告版本。</p>}
+          {refreshStatus && <p className="mt-3 rounded-lg bg-paper/[0.07] px-3 py-2 text-[10px] text-paper/65">{refreshStatus}</p>}
           <p className="mt-3 flex gap-1 border-t border-paper/10 pt-3 text-[9px] leading-4 text-paper/40"><span>成交活跃度</span><span>不代表买入人数或资金净流入</span></p>
           {refreshError && <p className="mt-3 rounded-lg bg-red-400/10 p-2 text-[10px] text-red-200">{refreshError}</p>}
         </div>
@@ -254,6 +255,36 @@ function CitationPanel({ citations, report, refreshing, refreshError, onRefresh 
   );
 }
 
+function availableMarketProduct(product: EtfMarketProduct) {
+  return product.data_status === "available" || product.data_status === "partial" || product.data_status === "stale";
+}
+
+function EtfMarketTable({ products }: { products?: EtfMarketProduct[] }) {
+  if (!products?.length) return <div className="mt-6 rounded-xl border border-dashed border-line p-7 text-center text-sm text-muted">尚无 ETF 行情行。点击右侧“刷新”后，这里会显示每只产品的成功值或明确失败状态。</div>;
+  return (
+    <div className="mt-6 overflow-x-auto rounded-xl border border-line bg-paper">
+      <table className="w-full min-w-[820px] border-collapse text-left text-xs">
+        <thead className="bg-ink/[0.035] text-[10px] uppercase tracking-[0.1em] text-muted"><tr><th className="px-4 py-3">ETF</th><th className="px-4 py-3">最新收盘</th><th className="px-4 py-3">1 月</th><th className="px-4 py-3">3 月波动</th><th className="px-4 py-3">最大回撤</th><th className="px-4 py-3">20 日平均成交额</th><th className="px-4 py-3">核验状态</th><th className="px-4 py-3">来源</th></tr></thead>
+        <tbody className="divide-y divide-line">
+          {products.slice(0, 6).map((product) => {
+            const available = availableMarketProduct(product);
+            return <tr key={product.ticker} className="align-top">
+              <td className="px-4 py-3"><p className="font-mono font-semibold text-ink">{product.ticker}</p><p className="mt-1 max-w-36 text-[10px] text-muted">{product.issuer || product.category || "发行人待核验"}</p></td>
+              <td className="px-4 py-3 font-semibold text-ink">{available ? formatMoney(product.last_close, product.currency) : "—"}</td>
+              <td className="px-4 py-3 text-ink">{available ? formatPercent(product.returns?.["1m"]) : "—"}</td>
+              <td className="px-4 py-3 text-ink">{available ? formatPercent(product.annualized_volatility_3m) : "—"}</td>
+              <td className="px-4 py-3 text-ink">{available ? formatPercent(product.max_drawdown_3m) : "—"}</td>
+              <td className="px-4 py-3 text-ink">{available ? formatMoney(product.average_dollar_volume_20d, product.currency) : "—"}</td>
+              <td className="max-w-52 px-4 py-3"><span className={cn("font-semibold", available ? "text-signal" : "text-amber")}>{product.data_status === "stale" ? "缓存行情" : available ? "行情可用" : "未取得行情"}</span><p className="mt-1 text-[10px] leading-4 text-muted">{product.cross_source_validation?.status === "consistent" ? "双源可比字段一致" : product.cross_source_validation?.status === "conflict" ? "双源字段存在冲突" : product.cross_source_validation?.status === "single_source" ? "当前仅单源可用" : "字段口径不可直接比较"}</p>{product.error && <p title={product.error} className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted">{product.error}</p>}</td>
+              <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{(product.sources ?? ["yfinance"]).map((source) => <Badge key={source}>{source === "tiantian" ? "天天基金" : source}</Badge>)}</div><div className="mt-2"><SourceButton url={product.source_url} publisher={product.ticker} /></div></td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function LoadingMemo() {
   return (
     <div className="mx-auto max-w-[1480px] animate-pulse px-5 py-10 sm:px-8 xl:px-12">
@@ -277,50 +308,66 @@ function DataColumn({ title, eyebrow, items, empty }: { title: string; eyebrow: 
   );
 }
 
+function normalizeStructuredItems(items?: Array<string | Record<string, unknown>>) {
+  return (items ?? []).map((item) => {
+    if (typeof item === "string") return item;
+    return [item.driver, item.risk, item.mechanism, item.transmission, item.rationale].filter(Boolean).join("：");
+  }).filter(Boolean) as string[];
+}
+
+function Stars({ value }: { value: number | null }) {
+  if (value === null) return <span className="text-xs text-muted">未评估</span>;
+  return <span className="tracking-[.12em] text-amber" aria-label={`${value} 星`}>{"★".repeat(value)}<span className="text-line">{"★".repeat(Math.max(0, 5 - value))}</span></span>;
+}
+
 export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
   const [state, setState] = useState<ReportDetailLoadState>("idle");
   const [report, setReport] = useState<ReportMemoDetail | null>(null);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
-  const [versions, setVersions] = useState<Array<{version:number;content_hash:string;created_at:string}>>([]);
-  const [versionDiff, setVersionDiff] = useState<{added:string[];removed:string[]}|null>(null);
+  const [versions, setVersions] = useState<ReportVersionSummary[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined);
+  const [versionDiff, setVersionDiff] = useState<ReportVersionComparison | null>(null);
   const [marketRefreshing, setMarketRefreshing] = useState(false);
+  const [marketRefreshStatus, setMarketRefreshStatus] = useState("");
   const [marketRefreshError, setMarketRefreshError] = useState("");
 
   const load = useCallback(() => {
     setState((current) => current === "ready" ? "refreshing" : "loading");
     setError("");
-    reportDetailGateway.getReportDetail(reportId)
+    reportDetailGateway.getReportDetail(reportId, selectedVersion)
       .then((value) => { setReport(value); setState("ready"); })
       .catch((reason: Error & { status?: number }) => {
         setError(reason.message || "报告读取失败。");
         setState(reason.status === 404 ? "not_found" : "failed");
       });
-  }, [reportId]);
+  }, [reportId, selectedVersion]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
   useEffect(() => {
-    void fetch(`/api/reports/${encodeURIComponent(reportId)}/versions`).then((response)=>response.ok?response.json():Promise.reject()).then((payload:{versions:Array<{version:number;content_hash:string;created_at:string}>})=>setVersions(payload.versions)).catch(()=>setVersions([]));
+    void reportDetailGateway.getTimeline(reportId).then((payload) => setVersions(payload.versions)).catch(()=>setVersions([]));
   },[reportId,refreshKey]);
   async function compareLatestVersions(){
     if(versions.length<2)return;
-    const response=await fetch(`/api/reports/${encodeURIComponent(reportId)}/compare?left=${versions[1].version}&right=${versions[0].version}`);
-    if(response.ok)setVersionDiff(await response.json() as {added:string[];removed:string[]});
+    try { setVersionDiff(await reportDetailGateway.compareVersions(reportId, versions[1].version, versions[0].version)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "版本比较失败"); }
   }
   async function refreshMarketSnapshot() {
-    setMarketRefreshing(true); setMarketRefreshError("");
+    setMarketRefreshing(true); setMarketRefreshStatus("行情刷新任务正在排队"); setMarketRefreshError("");
     try {
       const { runId } = await reportDetailGateway.refreshMarketSnapshot(reportId);
       for (let attempt = 0; attempt < 120; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         const response = await fetch(`/api/research-runs/${encodeURIComponent(runId)}`);
         if (!response.ok) throw new Error(`刷新任务返回 ${response.status}`);
-        const run = await response.json() as { status: string; error?: string };
-        if (run.status === "completed") { setRefreshKey((value) => value + 1); return; }
+        const run = await response.json() as { status: string; progress?: number; error?: string };
+        setMarketRefreshStatus(run.status === "queued" ? "行情刷新任务正在排队" : `正在逐只读取公开行情 · ${run.progress ?? 0}%`);
+        if (run.status === "completed") { setMarketRefreshStatus("行情快照已更新"); setRefreshKey((value) => value + 1); return; }
         if (["failed", "cancelled", "blocked_configuration"].includes(run.status)) throw new Error(run.error || "市场快照刷新失败");
       }
       throw new Error("市场快照刷新超时，请稍后重新加载报告。");
     } catch (reason) {
+      setMarketRefreshStatus("行情刷新未完成");
       setMarketRefreshError(reason instanceof Error ? reason.message : "市场快照刷新失败");
     } finally { setMarketRefreshing(false); }
   }
@@ -346,7 +393,7 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
     <div className={cn("mx-auto max-w-[1480px] px-5 py-8 sm:px-8 sm:py-12 xl:px-12", state === "refreshing" && "opacity-70 transition")}>
       <nav className="flex items-center justify-between">
         <Link href="/reports" className="inline-flex items-center gap-2 text-xs font-semibold text-muted hover:text-ink"><ArrowLeft className="h-4 w-4" />返回研究资料库</Link>
-        <Button variant="ghost" size="sm" onClick={() => setRefreshKey((value) => value + 1)} disabled={state === "refreshing"}>
+        <Button variant="ghost" size="sm" onClick={() => { setSelectedVersion(undefined); setRefreshKey((value) => value + 1); }} disabled={state === "refreshing"}>
           <RefreshCw className={cn("h-3.5 w-3.5", state === "refreshing" && "animate-spin")} />同步最新版本
         </Button>
       </nav>
@@ -385,8 +432,9 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
             <Button variant="outline" size="sm" disabled={versions.length<2} onClick={()=>void compareLatestVersions()}>比较最近两个版本</Button>
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">{versions.map((version)=><Badge key={version.version}>V{version.version} · {version.content_hash.slice(0,8)}</Badge>)}{versions.length===0&&<p className="text-xs text-muted">当前报告尚无版本快照。</p>}</div>
-        {versionDiff&&<div className="mt-4 grid gap-4 text-xs md:grid-cols-2"><div className="rounded-xl bg-signal/[.06] p-3"><p className="font-semibold text-ink">新增 {versionDiff.added.length} 行</p>{versionDiff.added.slice(0,5).map((line,index)=><p key={index} className="mt-1 line-clamp-2 text-muted">+ {line}</p>)}</div><div className="rounded-xl bg-amber/[.07] p-3"><p className="font-semibold text-ink">移除 {versionDiff.removed.length} 行</p>{versionDiff.removed.slice(0,5).map((line,index)=><p key={index} className="mt-1 line-clamp-2 text-muted">− {line}</p>)}</div></div>}
+        <div className="mt-4 flex flex-wrap gap-2">{versions.map((version)=><button type="button" key={version.version} onClick={() => setSelectedVersion(version.version)} className={cn("rounded-full border px-3 py-1.5 text-[11px] font-semibold transition", report.version === version.version ? "border-signal bg-signal/[.08] text-signal" : "border-line text-muted hover:border-ink/20 hover:text-ink")}>V{version.version} · {version.content_hash.slice(0,8)}</button>)}{versions.length===0&&<p className="text-xs text-muted">当前报告尚无版本快照。</p>}</div>
+        {versions.length > 0 && <ol className="mt-5 border-l border-line pl-5">{versions.slice(0, 4).map((version) => <li key={`timeline-${version.version}`} className="relative pb-4 last:pb-0"><span className="absolute -left-[24px] top-1 h-2 w-2 rounded-full border-2 border-signal bg-paper" /><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => setSelectedVersion(version.version)} className="text-xs font-semibold text-ink hover:text-signal">V{version.version} · {formatDate(version.created_at)}</button>{version.change_tags?.map((tag) => <Badge key={tag}>{tag}</Badge>)}</div>{version.conclusion && <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{version.conclusion}</p>}</li>)}</ol>}
+        {versionDiff&&<div className="mt-4 rounded-xl border border-line bg-canvas p-4 text-xs"><div className="grid gap-4 md:grid-cols-2"><div><p className="font-semibold text-ink">结论变化</p><p className="mt-2 leading-5 text-muted">{versionDiff.structured.conclusion.changed ? versionDiff.structured.conclusion.after : "两个版本的核心结论未发生变化。"}</p></div><div><p className="font-semibold text-ink">结构变化</p><p className="mt-2 leading-5 text-muted">评分变化 {versionDiff.structured.score_changes.length} 项 · ETF 新增 {versionDiff.structured.etfs_added.length} 只 · 关闭证据缺口 {versionDiff.structured.evidence_gaps_closed.length} 项</p></div></div><details className="mt-3 border-t border-line pt-3"><summary className="cursor-pointer text-muted">查看正文行级差异</summary><div className="mt-3 grid gap-4 md:grid-cols-2"><div>{versionDiff.added.slice(0,5).map((line,index)=><p key={index} className="mt-1 line-clamp-2 text-muted">+ {line}</p>)}</div><div>{versionDiff.removed.slice(0,5).map((line,index)=><p key={index} className="mt-1 line-clamp-2 text-muted">− {line}</p>)}</div></div></details></div>}
       </section>
 
       <div className="mt-9 grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -430,6 +478,21 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
             </div>
           </section>
 
+          {report.structuredAnalysis && <>
+            <section className="mt-12">
+              <div className="flex items-center gap-3 border-b border-ink pb-4"><span className="font-mono text-xs text-signal">02</span><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-muted">Industry structure</p><h2 className="mt-1 text-2xl font-semibold tracking-[-.03em] text-ink">为什么选择与产业链潜力</h2></div></div>
+              <div className="mt-6 grid gap-5 lg:grid-cols-[.8fr_1.2fr]"><div className="rounded-2xl bg-ink p-6 text-paper"><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-[#8FD5C7]">Selection reason</p><p className="mt-4 text-base leading-8 text-paper/85">{report.structuredAnalysis.whyTheme?.selection_reason || report.investmentThesis}</p>{report.structuredAnalysis.industryChain?.priority_logic && <p className="mt-5 border-t border-paper/10 pt-4 text-xs leading-6 text-paper/60">{report.structuredAnalysis.industryChain.priority_logic}</p>}</div><div className="grid gap-3 sm:grid-cols-2">{(report.structuredAnalysis.industryChain?.segments ?? []).map((segment, index) => <article key={`${segment.name}-${index}`} className="rounded-2xl border border-line bg-paper p-5"><div className="flex items-center justify-between gap-3"><h3 className="font-semibold text-ink">{segment.name || `产业环节 ${index + 1}`}</h3><Badge>{segment.potential || "待评估"}</Badge></div><p className="mt-3 text-sm leading-6 text-muted">{segment.rationale || "尚缺少足够证据判断该环节的潜力。"}</p>{segment.pricing_power && <p className="mt-3 border-t border-line pt-3 text-xs leading-5 text-ink/70">定价权：{segment.pricing_power}</p>}</article>)}{!(report.structuredAnalysis.industryChain?.segments?.length) && <div className="col-span-full rounded-2xl border border-dashed border-line p-8 text-center text-sm text-muted">产业链环节尚未形成可审计排序。</div>}</div></div>
+            </section>
+
+            <section className="mt-12 rounded-2xl border border-line bg-paper p-6 shadow-card sm:p-8"><div className="flex items-center gap-3"><span className="font-mono text-xs text-signal">03</span><h2 className="text-xl font-semibold text-ink">增长驱动力与风险传导</h2></div><div className="mt-7 grid gap-8 lg:grid-cols-2"><DataColumn eyebrow="Growth drivers" title="增长驱动力" items={normalizeStructuredItems(report.structuredAnalysis.growthDrivers)} empty="尚未形成可验证的增长驱动链条。" /><DataColumn eyebrow="Risk transmission" title="风险与反向指标" items={normalizeStructuredItems(report.structuredAnalysis.risks)} empty="尚未形成结构化风险传导路径。" /></div></section>
+
+            <section className="mt-12"><div className="flex items-center justify-between border-b border-line pb-4"><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-signal">5–10 year outlook</p><h2 className="mt-1 text-2xl font-semibold tracking-[-.03em] text-ink">长期三情景</h2></div><Badge>非收益预测</Badge></div><div className="mt-6 grid gap-4 lg:grid-cols-3">{(report.structuredAnalysis.scenarios ?? []).map((scenario) => <article key={scenario.id} className={cn("rounded-2xl border p-5", scenario.id === "optimistic" ? "border-signal/25 bg-signal/[.045]" : scenario.id === "pessimistic" ? "border-amber/25 bg-amber/[.045]" : "border-line bg-paper")}><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-muted">{scenario.id}</p><h3 className="mt-2 text-lg font-semibold text-ink">{scenario.label}</h3><p className="mt-4 text-sm leading-6 text-muted">{scenario.industry_path}</p><p className="mt-4 border-t border-line pt-4 text-xs leading-5 text-ink/75"><strong>ETF 角度：</strong>{scenario.etf_implication}</p></article>)}</div></section>
+
+            <section className="mt-12 overflow-hidden rounded-2xl border border-line bg-paper shadow-card"><header className="border-b border-line bg-ink px-6 py-5 text-paper"><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-[#8FD5C7]">Integrated judgment</p><h2 className="mt-1 text-xl font-semibold">综合判断</h2></header><div className="divide-y divide-line">{(report.structuredAnalysis.scorecard ?? []).map((item) => <div key={item.id} className="grid gap-2 px-6 py-4 sm:grid-cols-[minmax(0,220px)_110px_minmax(0,1fr)] sm:items-center"><p className="text-sm font-semibold text-ink">{item.label}</p><Stars value={item.stars} /><p className="text-xs leading-5 text-muted">{item.reason}</p></div>)}</div><div className="border-t border-line bg-canvas px-6 py-5"><p className="text-base font-semibold leading-7 text-ink">{report.conclusion.statement}</p></div></section>
+
+            {(report.structuredAnalysis.evidenceGaps?.length ?? report.conclusion.evidenceGaps?.length ?? 0) > 0 && <section className="mt-12 rounded-2xl border border-amber/25 bg-[#F7F5F0] p-6 sm:p-8"><div className="flex items-center gap-3"><TriangleAlert className="h-5 w-5 text-amber" /><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-amber">Evidence gaps</p><h2 className="mt-1 text-xl font-semibold text-ink">证据不足在哪里，以及为什么影响判断</h2></div></div><div className="mt-6 space-y-4">{(report.structuredAnalysis.evidenceGaps ?? report.conclusion.evidenceGaps ?? []).map((gap, index) => <article key={`${gap.area}-${index}`} className="rounded-xl border border-line bg-paper p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold text-ink">{gap.area}</h3><Badge>{gap.status || "待补证"}</Badge></div><dl className="mt-4 grid gap-3 text-xs leading-5 sm:grid-cols-2"><div><dt className="font-semibold text-muted">缺少什么</dt><dd className="mt-1 text-ink/80">{gap.gap}</dd></div><div><dt className="font-semibold text-muted">为何缺少</dt><dd className="mt-1 text-ink/80">{gap.why_missing}</dd></div><div><dt className="font-semibold text-muted">对结论的影响</dt><dd className="mt-1 text-ink/80">{gap.impact}</dd></div><div><dt className="font-semibold text-muted">补证路径</dt><dd className="mt-1 text-ink/80">{gap.next_action}</dd></div></dl></article>)}</div></section>}
+          </>}
+
           <section className="mt-12">
             <div className="flex items-end justify-between border-b border-ink pb-4">
               <div><p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-signal">Bull Case</p><h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-ink">支持证据</h2></div>
@@ -462,6 +525,10 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
               <DataColumn eyebrow="Existing ETFs" title="现有 ETF" items={report.etfLandscape.existingEtfs} empty="暂无已验证的竞品清单。" />
               <DataColumn eyebrow="Overlap" title="持仓重叠" items={report.etfLandscape.overlap === "unknown" ? [] : [report.etfLandscape.overlap]} empty="unknown：尚未完成持仓穿透。" />
               <DataColumn eyebrow="White space" title="产品空白" items={report.etfLandscape.whiteSpace === "unknown" ? [] : [report.etfLandscape.whiteSpace]} empty="unknown：数据不足，不判断产品空白。" />
+            </div>
+            <div className="mt-8 border-t border-line pt-6">
+              <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-signal">Market snapshot ledger</p><h3 className="mt-1 text-base font-semibold text-ink">ETF 行情与交易活跃度</h3></div><p className="text-[10px] text-muted">独立快照 · 不改变报告版本 · 最多展示 6 只</p></div>
+              <EtfMarketTable products={report.latestMarketSnapshot?.products ?? report.etfLandscape.products} />
             </div>
           </section>
 
@@ -501,7 +568,7 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
             <span className="inline-flex items-center gap-2"><Clock3 className="h-3.5 w-3.5" />版本 V{report.version} · {formatDate(report.lastUpdated)}</span>
           </footer>
         </main>
-        <CitationPanel citations={citations} report={report} refreshing={marketRefreshing} refreshError={marketRefreshError} onRefresh={() => void refreshMarketSnapshot()} />
+        <CitationPanel citations={citations} report={report} refreshing={marketRefreshing} refreshStatus={marketRefreshStatus} refreshError={marketRefreshError} onRefresh={() => void refreshMarketSnapshot()} />
       </div>
     </div>
   );

@@ -3,39 +3,59 @@ import ast, asyncio, json, os
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from threading import Thread
 from typing import Literal
 from uuid import uuid4
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .connector_factory import configured_connectors
 from .models import utcnow
 from .pipeline import ingest
 from .reports import build_daily_brief
-from .store import EvidenceStore
+from .store import EvidenceStore, RESEARCH_EXECUTION_STATUSES
 from .workflow import recover_interrupted_runs
 from .worker import stop_all_workers, worker_for, worker_status
+from .sync_worker import stop_all_sync_workers, sync_worker_for, sync_worker_status
 from .governance import reclassify_store
 from .agent_runtime import capability_status
 from .ontology import refresh_research_assets
+from . import internal_auth
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    internal_auth.validate_configuration()
     recovered = recover_interrupted_runs(_db())
     worker = worker_for(_db())
     if recovered:
         worker.wake()
+    sync_worker = sync_worker_for(_db())
     if os.getenv("STARTUP_SYNC_ENABLED","true").lower() in {"1","true","yes","on"}:
-        Thread(target=_startup_sync, daemon=True).start()
+        store = _store()
+        try:
+            today = date.today().isoformat()
+            store.create_sync_run(str(uuid4()), utcnow(), days=int(os.getenv("STARTUP_SYNC_DAYS","7")), idempotency_key=f"daily:{today}")
+            iso_year, iso_week, _ = date.today().isocalendar()
+            store.create_discovery_run({
+                "discovery_run_id": str(uuid4()), "idempotency_key": f"weekly:{iso_year}-W{iso_week:02d}",
+                "run_kind": "weekly", "status": "queued", "stage": "queued", "created_at": utcnow(),
+                "window_start": (date.today() - timedelta(days=29)).isoformat(), "window_end": today,
+            })
+        finally: store.close()
+        sync_worker.wake()
     try:
         yield
     finally:
+        stop_all_sync_workers()
         stop_all_workers()
 
-app=FastAPI(title="ETF Theme Radar",version="0.3.0",description="内部主题研究工具；不提供投资、产品或交易建议。",lifespan=lifespan)
+app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-07-31.v4"
+CONTRACT_VERSION = "2026-08-05.v9"
+CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
+AUTO_RESEARCH_SOURCES = [
+    "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
+    "patents", "sp_global", "x", "forums",
+]
 SOURCE_METADATA = {
     "sec_edgar_etf": {"display_name":"SEC ETF 文件","short_name":"SEC","category":"监管文件","logo_url":"https://www.sec.gov/files/sec-logo.png","evidence_role":"primary","authority":"official"},
     "openalex": {"display_name":"OpenAlex 论文","short_name":"OpenAlex","category":"学术论文","logo_url":"https://cdn.simpleicons.org/openaccess/10273D","evidence_role":"primary","authority":"academic"},
@@ -47,6 +67,7 @@ SOURCE_METADATA = {
     "anysearch_discovery": {"display_name":"公开讨论发现","short_name":"Web","category":"X / 公开论坛","logo_url":None,"evidence_role":"discovery","authority":"secondary"},
 }
 def _db(path: str | None=None) -> str: return path or os.getenv("DATABASE_PATH","data/radar.db")
+def _public_url(name: str, fallback: str) -> str: return os.getenv(name, fallback).strip().rstrip("/") or fallback
 def _store(path: str | None=None) -> EvidenceStore: return EvidenceStore(_db(path))
 def _run_database_path(run_id: str) -> str:
     registry = _store()
@@ -59,9 +80,9 @@ def _report_store(report_id: str) -> EvidenceStore:
 class ResearchRequest(BaseModel):
     topic:str|None=Field(default=None,min_length=2,max_length=200)
     theme:str|None=None
-    objective:str="build_investment_thesis"
-    sources:list[str]=Field(default_factory=lambda:["sec","arxiv","company_careers","etf_holdings","etf_news","x","forums"])
-    time_range:str="90d"
+    objective:str=CORE_RESEARCH_OBJECTIVE
+    sources:list[str]=Field(default_factory=list)
+    time_range:str="multi_horizon"
     custom_date_range:dict|None=None
     output_type:str="theme_report"
     database_path:str|None=None
@@ -72,6 +93,58 @@ class ReportUpdateRequest(BaseModel):
     status:Literal["deep_research","watch","completed","draft","archived"]|None=None
 class ReportAssistantRequest(BaseModel): command:str=Field(min_length=1,max_length=500)
 class EntityReviewRequest(BaseModel): decision:Literal["confirmed","rejected"]
+class ThemeCandidateReviewRequest(BaseModel):
+    decision:Literal["confirm","merge","reject"]
+    target_theme_id:str=""
+    note:str=Field(default="",max_length=500)
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=256)
+
+def _is_public_auth_path(path: str) -> bool:
+    return path in {"/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
+
+@app.middleware("http")
+async def require_internal_login(request: Request, call_next):
+    if not internal_auth.enabled() or _is_public_auth_path(request.url.path):
+        return await call_next(request)
+    username = internal_auth.session_user(request.cookies.get(internal_auth.COOKIE_NAME))
+    if not username:
+        return JSONResponse({"detail": "请先登录内部账号"}, status_code=401)
+    request.state.internal_username = username
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        expected_origin = _public_url("PUBLIC_FRONTEND_URL", "").rstrip("/")
+        if origin and expected_origin and origin.rstrip("/") != expected_origin:
+            return JSONResponse({"detail": "跨站写操作被拒绝"}, status_code=403)
+    return await call_next(request)
+
+@app.get("/api/auth/session")
+def auth_session(request: Request):
+    if not internal_auth.enabled():
+        return {"enabled": False, "authenticated": True, "username": "local"}
+    username = internal_auth.session_user(request.cookies.get(internal_auth.COOKIE_NAME))
+    return {"enabled": True, "authenticated": bool(username), "username": username or ""}
+
+@app.post("/api/auth/login")
+def auth_login(request: LoginRequest, response: Response):
+    if not internal_auth.enabled():
+        raise HTTPException(404, "内部账号登录未启用")
+    user = internal_auth.authenticate(request.username, request.password)
+    if not user:
+        raise HTTPException(401, "账号或密码错误")
+    secure = os.getenv("INTERNAL_AUTH_COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    ttl = max(300, int(os.getenv("INTERNAL_AUTH_TTL_SECONDS", str(internal_auth.DEFAULT_TTL_SECONDS))))
+    response.set_cookie(
+        internal_auth.COOKIE_NAME, internal_auth.issue_session(user.username),
+        max_age=ttl, httponly=True, secure=secure, samesite="lax", path="/",
+    )
+    return {"authenticated": True, "username": user.username}
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(internal_auth.COOKIE_NAME, path="/")
+    return {"authenticated": False}
 
 @app.get("/health")
 def health(): return {"status":"ok","trading":"disabled","service_id":SERVICE_ID,"contract_version":CONTRACT_VERSION}
@@ -82,16 +155,107 @@ def capabilities():
     raw_health = connector_health()
     connectors = [{**item, **SOURCE_METADATA.get(item["source_name"], {"display_name":item["source_name"],"short_name":item["source_name"],"category":"公开来源","logo_url":None,"evidence_role":"supporting","authority":"unknown"})} for item in raw_health]
     ready = sum(item["enabled"] and item["status"] == "healthy" for item in connectors)
+    store = _store()
+    try:
+        preview = store.latest_etf_preview_snapshot()
+        preview_run = store.active_etf_preview_sync_run()
+    finally:
+        store.close()
     return {
-        "service":{"id":SERVICE_ID,"name":"ETF Theme Radar","version":app.version,"contract_version":CONTRACT_VERSION,"canonical_api":"http://127.0.0.1:8001","canonical_frontend":"http://127.0.0.1:3000"},
+        "service":{"id":SERVICE_ID,"name":"ETF Theme Radar","version":app.version,"contract_version":CONTRACT_VERSION,"canonical_api":_public_url("PUBLIC_API_URL", "http://127.0.0.1:8001"),"canonical_frontend":_public_url("PUBLIC_FRONTEND_URL", "http://127.0.0.1:3000")},
         "worker":worker_status(_db()),
+        "sync_discovery_worker":sync_worker_status(_db()),
         "connectors":connectors,
         "sources":connectors,
         "source_coverage":{"ready":ready,"total":len(connectors),"label":f"{ready}/{len(connectors)}","excluded":["patentsview"]},
         "llm":capability_status(),
         "playwright_mcp":{"configured":bool(os.getenv("PLAYWRIGHT_MCP_COMMAND"))},
-        "output_types":{"theme_report":True,"quick_scan":True,"etf_opportunity_analysis":True},
-        "runtime_profiles":{"etf_opportunity_analysis":{"name":"ETF 快速档","max_seconds":240,"max_tool_calls":8,"max_model_requests":4,"estimated_minutes":"2–4","source_priority":["cache","official_etf_holdings","yahoo_etf_news","google_patents_if_needed","counter_search"]}},
+        "core_capability":{"id":CORE_RESEARCH_OBJECTIVE,"name":"分析 ETF 格局、跟踪产业动量","output_type":"theme_report"},
+        "output_types":{"theme_report":True},
+        "runtime_profiles":{"theme_report":{"name":"统一主题研究","max_seconds":480,"max_tool_calls":12,"max_model_requests":6,"time_windows":["30d","90d","1y","5-10y_scenarios"],"source_selection":"automatic"}},
+        "etf_preview": {
+            "source": "天天基金网", "enabled": True,
+            "status": (preview or {}).get("status", "not_synced"),
+            "last_collected_at": (preview or {}).get("collected_at", ""),
+            "market_as_of": (preview or {}).get("market_as_of", ""),
+            "total": int((preview or {}).get("total", 0)),
+            "refresh_status": (preview_run or {}).get("status", "idle"),
+        },
+    }
+
+@app.get("/api/etf-preview")
+def get_etf_preview(
+    category: Literal["sp500", "exchange", "active"] | None = None,
+    q: str = Query(default="", max_length=100),
+    sort_by: Literal[
+        "code", "name", "operating_fee", "scale_billion", "return_2025",
+        "rolling_1y", "yesterday_return", "tracking_error", "premium_rate",
+        "average_turnover_billion_20d",
+    ] = "scale_billion",
+    order: Literal["asc", "desc"] = "desc",
+):
+    store = _store()
+    try:
+        snapshot = store.latest_etf_preview_snapshot()
+        active_run = store.active_etf_preview_sync_run()
+    finally:
+        store.close()
+    if not snapshot:
+        return {
+            "state": "empty", "source": "天天基金网", "items": [],
+            "counts": {"sp500": 0, "exchange": 0, "active": 0},
+            "filtered_count": 0, "total_before_filters": 0,
+            "refresh": active_run,
+        }
+    categories = snapshot.get("categories") or {}
+    items = list(categories.get(category, [])) if category else [item for values in categories.values() for item in values]
+    query = q.strip().casefold()
+    if query:
+        items = [
+            item for item in items
+            if query in str(item.get("code") or "").casefold()
+            or query in str(item.get("c_code") or "").casefold()
+            or query in str(item.get("name") or "").casefold()
+        ]
+    present = [item for item in items if item.get(sort_by) is not None]
+    missing = [item for item in items if item.get(sort_by) is None]
+
+    def sort_value(item: dict):
+        value = item.get(sort_by)
+        return value.casefold() if isinstance(value, str) else value
+
+    present.sort(key=sort_value, reverse=order == "desc")
+    items = present + missing
+    return {
+        **{key: value for key, value in snapshot.items() if key != "categories"},
+        "state": "ready" if snapshot.get("status") == "available" else "degraded",
+        "items": items,
+        "filtered_count": len(items),
+        "total_before_filters": len(categories.get(category, [])) if category else int(snapshot.get("total", 0)),
+        "refresh": active_run,
+    }
+
+@app.post("/api/etf-preview/refresh", status_code=202)
+def refresh_etf_preview():
+    store = _store()
+    try:
+        existing = store.active_etf_preview_sync_run()
+        if existing:
+            return {
+                "sync_run_id": existing["sync_run_id"], "status": existing["status"],
+                "poll_url": f"/api/sync-runs/{existing['sync_run_id']}", "idempotent": True,
+            }
+        sync_run_id = str(uuid4())
+        store.create_sync_run(
+            sync_run_id, utcnow(), days=0,
+            idempotency_key=f"etf-preview:manual:{sync_run_id}",
+        )
+    finally:
+        store.close()
+    sync_worker_for(_db()).wake()
+    return {
+        "sync_run_id": sync_run_id, "status": "queued",
+        "poll_url": f"/api/sync-runs/{sync_run_id}", "idempotent": False,
     }
 @app.post("/api/pipeline/run")
 def run_pipeline(days:int=Query(default=7,ge=1,le=31)):
@@ -99,51 +263,16 @@ def run_pipeline(days:int=Query(default=7,ge=1,le=31)):
     try: return {c.source_name:ingest(c,store,until-timedelta(days=days),until) for c in configured_connectors(Path("data/cache"))}
     finally: store.close()
 
-def _startup_sync() -> None:
-    try:
-        run_pipeline(int(os.getenv("STARTUP_SYNC_DAYS","7")))
-        store=_store()
-        try:
-            reclassify_store(store)
-            refresh_research_assets(store)
-        finally: store.close()
-    except Exception:
-        # Source-specific failures are recorded by the pipeline; startup must remain available.
-        return
-
-@app.post("/api/sync")
+@app.post("/api/sync",status_code=202)
 def sync_sources(days:int=Query(default=7,ge=1,le=31)):
-    sources=run_pipeline(days); store=_store()
-    try:
-        governance=reclassify_store(store)
-        assets=refresh_research_assets(store)
-    finally: store.close()
-    return {"status":"completed","sources":sources,"governance":governance,"research_assets":assets,"completed_at":utcnow()}
-
-def _sync_run_worker(sync_run_id:str, days:int) -> None:
-    store=_store(); results={}; connectors=configured_connectors(Path("data/cache")); until=date.today()
-    try:
-        store.update_sync_run(sync_run_id,status="running",progress=1,updated_at=utcnow())
-        for index, connector in enumerate(connectors):
-            current=store.sync_run(sync_run_id)
-            if current and current["cancel_requested"]:
-                store.update_sync_run(sync_run_id,status="cancelled",progress=current["progress"],current_source=connector.source_name,updated_at=utcnow(),result=results,error="用户取消同步")
-                return
-            store.update_sync_run(sync_run_id,status="running",progress=max(1,int(index/max(len(connectors),1)*80)),current_source=connector.source_name,updated_at=utcnow(),result=results)
-            try: results[connector.source_name]=ingest(connector,store,until-timedelta(days=days),until)
-            except Exception as exc: results[connector.source_name]={"status":"degraded","error":str(exc)}
-        governance=reclassify_store(store); assets=refresh_research_assets(store)
-        store.update_sync_run(sync_run_id,status="completed",progress=100,updated_at=utcnow(),result={"sources":results,"governance":governance,"research_assets":assets})
-    except Exception as exc:
-        store.update_sync_run(sync_run_id,status="failed",progress=0,updated_at=utcnow(),result=results,error=str(exc))
-    finally: store.close()
+    return create_sync_run(days)
 
 @app.post("/api/sync-runs",status_code=202)
 def create_sync_run(days:int=Query(default=7,ge=1,le=31)):
     sync_run_id=str(uuid4()); store=_store()
-    try: store.create_sync_run(sync_run_id,utcnow())
+    try: store.create_sync_run(sync_run_id,utcnow(),days=days)
     finally: store.close()
-    Thread(target=_sync_run_worker,args=(sync_run_id,days),daemon=True).start()
+    sync_worker_for(_db()).wake()
     return {"sync_run_id":sync_run_id,"status":"queued"}
 
 @app.get("/api/sync-runs")
@@ -250,6 +379,7 @@ def _theme_payloads() -> list[dict]:
         events = [item for item in store.events() if item.get("relevance_status")=="relevant" and item.get("theme_assignment_status")=="assigned"]
         definitions={item["theme_id"]:item for item in store.theme_definitions()}
         snapshots=store.theme_snapshots()
+        reports={item["theme_id"]:item for item in store.report_assets() if item.get("kind") == "theme_report"}
     finally: store.close()
     grouped:dict[str,list[dict]] = {}
     for event in events: grouped.setdefault(event.get("primary_theme") or "unknown",[]).append(event)
@@ -267,6 +397,7 @@ def _theme_payloads() -> list[dict]:
         definition=definitions.get(theme,{})
         latest=items[0] if items else {}
         metrics=(snapshot or {}).get("metrics",{})
+        report=reports.get(theme,{})
         payload.append({
             "id":f"theme_{theme}","slug":theme,"title":definition.get("name") or THEME_LABELS.get(theme,theme.replace("-"," ").title()),"englishTitle":theme.replace("-"," ").title(),
             "description":definition.get("description") or "由治理后的公开证据形成的主题观察。","sector":"semiconductors" if "semiconductor" in theme else "industrials" if "robot" in theme else "technology",
@@ -276,6 +407,7 @@ def _theme_payloads() -> list[dict]:
             "metrics":{"themeScore":score,"researchMomentum":metrics.get("research_momentum",min(100,len(items)*2)),"commercialAdoption":metrics.get("corporate_adoption",min(100,len(companies)*5)),"etfWhiteSpace":metrics.get("product_white_space",0),"companies":len(companies),"components":metrics.get("components",{}),"penalties":metrics.get("penalties",0),"evidenceGatePassed":metrics.get("evidence_gate_passed",False)},
             "latestCatalyst":latest.get("title") or "暂无最新催化剂","latestEvidence":latest.get("summary") or "暂无摘要","mainRisk":"反方证据、可投资性和集中度仍需持续复核。",
             "evidenceCount":len(items),"sourceTypeCount":len(source_types),"updatedAt":latest.get("observed_at") or definition.get("updated_at","") ,
+            "currentConclusion":report.get("summary") or "尚未发布正式主题结论。","reportVersion":int(report.get("version") or 0),"lastVerifiedAt":report.get("updated_at") or "","reportId":report.get("report_id") or "",
             "coverage":{"evidence":len(items),"sourceTypes":len(source_types),"official":primary,"confidence":snapshot.get("confidence","low") if snapshot else "low"},
         })
     return sorted(payload,key=lambda item:item["metrics"]["themeScore"],reverse=True)
@@ -286,7 +418,44 @@ def themes(sector:str="all",source:str="all",period:str="90d",stage:str="all"):
     if sector!="all": items=[item for item in items if item["sector"]==sector]
     if source!="all": items=[item for item in items if source in item["sources"]]
     if stage!="all": items=[item for item in items if item["stage"]==stage]
-    return {"themes":items,"totalBeforeFilters":len(_theme_payloads()),"generatedAt":utcnow(),"coverageNote":f"{period} 观察窗口 · 历史不足时不推断趋势"}
+    store=_store()
+    try: candidates=store.theme_candidates(limit=50)
+    finally: store.close()
+    return {"themes":items,"candidates":candidates,"totalBeforeFilters":len(_theme_payloads()),"generatedAt":utcnow(),"coverageNote":f"{period} 观察窗口 · 候选先过可信度门槛再排序 · 历史不足时不推断趋势"}
+
+@app.get("/api/theme-candidates")
+def theme_candidates(status:str|None=None,limit:int=Query(default=50,ge=1,le=200)):
+    store=_store()
+    try: items=store.theme_candidates(status=status,limit=limit)
+    finally: store.close()
+    return {"candidates":items,"count":len(items),"generatedAt":utcnow(),"reviewRequired":True}
+
+@app.get("/api/discovery-runs")
+def discovery_runs(limit:int=Query(default=20,ge=1,le=100)):
+    store=_store()
+    try: items=store.discovery_runs(limit)
+    finally: store.close()
+    return {"runs":items,"count":len(items)}
+
+@app.get("/api/theme-candidates/{candidate_id}")
+def theme_candidate(candidate_id:str):
+    store=_store()
+    try: item=store.theme_candidate(candidate_id)
+    finally: store.close()
+    if not item: raise HTTPException(404,"候选主题不存在")
+    return item
+
+@app.post("/api/theme-candidates/{candidate_id}/review")
+def review_theme_candidate(candidate_id:str,request:ThemeCandidateReviewRequest):
+    store=_store(); result=None
+    try:
+        try: result=store.review_theme_candidate(candidate_id,request.decision,utcnow(),target_theme_id=request.target_theme_id,note=request.note)
+        except ValueError as exc: raise HTTPException(409,str(exc)) from exc
+        if result and result.get("theme_id"):
+            refresh_research_assets(store)
+    finally: store.close()
+    if not result: raise HTTPException(409,"候选不存在或已经完成复核")
+    return result
 
 @app.get("/api/entities/review")
 def entity_review_queue():
@@ -326,7 +495,8 @@ def global_search(q:str=Query(min_length=2,max_length=120),limit:int=Query(defau
     results += [{"id":item["report_id"],"kind":"report","title":item["title"],"summary":item.get("summary","")[:180],"href":f"/reports/{item['report_id']}"} for item in report_items]
     return {"query":q,"results":results[:limit],"count":min(len(results),limit)}
 @app.post("/api/reports/daily")
-def daily_report(): return {"report_path":str(build_daily_brief(_store(),"data/reports/daily-brief.md"))}
+def daily_report():
+    raise HTTPException(410,"日报输出已停止创建；当前仅生成主题研究报告")
 
 @app.get("/api/reports")
 def report_library(
@@ -510,11 +680,17 @@ def _report_detail_payload(asset: dict, run: dict | None, latest_market_snapshot
         status = "DEEP_RESEARCH" if asset.get("status") == "deep_research" else "WATCH"
     missing = _memo_list(counter.get("missing_evidence")) or ["结构化反方证据、历史基线与产品重叠数据仍待补充。"]
     similar_etfs = landscape.get("similar_etfs") or []
+    theme_etf_snapshot = landscape.get("theme_etf_snapshot") or {}
     existing_etfs = [
         f"{item.get('ticker')} · {item.get('issuer')} · {item.get('category')}"
         if isinstance(item, dict) else str(item)
         for item in similar_etfs
     ]
+    existing_etfs.extend(
+        f"{item.get('code')} · {item.get('name')} · ETF 预览冻结快照"
+        for item in (theme_etf_snapshot.get("products") or [])
+        if isinstance(item, dict)
+    )
     market_snapshot = landscape.get("market_snapshot") or {}
     if latest_market_snapshot:
         independent_market = {
@@ -541,6 +717,14 @@ def _report_detail_payload(asset: dict, run: dict | None, latest_market_snapshot
     company_status = "partial" if companies or beneficiaries else "unknown"
     thesis = str(hypothesis.get("hypothesis") or asset.get("summary") or "当前报告尚未形成可审计的结构化主题假设。")
     conclusion = result.get("conclusion") or {}
+    report_sections = result.get("report_sections") or {}
+    evidence_gaps = report_sections.get("evidence_gaps") or conclusion.get("evidence_gaps") or []
+    detailed_missing = [
+        f"{item.get('area')}：{item.get('gap')}。影响：{item.get('impact')}"
+        for item in evidence_gaps if isinstance(item, dict)
+    ]
+    if detailed_missing:
+        missing = detailed_missing
     fallback_verdict = "supported" if status == "DEEP_RESEARCH" else "insufficient" if status == "REJECT" else "mixed"
     conclusion_payload = {
         "verdict": str(conclusion.get("verdict") or fallback_verdict),
@@ -552,6 +736,7 @@ def _report_detail_payload(asset: dict, run: dict | None, latest_market_snapshot
         ),
         "keyEvidenceIds": [str(item) for item in conclusion.get("key_evidence_ids") or []],
         "limitations": _memo_list(conclusion.get("limitations")) or missing[:4],
+        "evidenceGaps": evidence_gaps,
         "modelUsed": bool(conclusion.get("model_used")),
     }
     return {
@@ -587,6 +772,11 @@ def _report_detail_payload(asset: dict, run: dict | None, latest_market_snapshot
             "marketAsOf": str(market_snapshot.get("market_as_of") or ""),
             "marketSnapshotStatus": str(market_snapshot.get("status") or "unknown"),
             "limitations": _memo_list(market_snapshot.get("limitations")),
+            "themeRelatedFunds": theme_etf_snapshot.get("products") or [],
+            "previewSnapshotId": str(theme_etf_snapshot.get("snapshot_id") or ""),
+            "previewMarketAsOf": str(theme_etf_snapshot.get("market_as_of") or ""),
+            "previewStatus": str(theme_etf_snapshot.get("status") or "not_assessed"),
+            "previewLimitations": _memo_list(theme_etf_snapshot.get("limitations")),
         },
         "latestMarketSnapshot": independent_market,
         "researchSources": _research_sources([*(brief.get("key_evidence") or []), *bear_raw]),
@@ -601,17 +791,38 @@ def _report_detail_payload(asset: dict, run: dict | None, latest_market_snapshot
             "rationale": "证据质量与来源覆盖支持继续研究。" if status == "DEEP_RESEARCH" else "关键证据缺口尚未关闭，当前维持观察。",
             "nextActions": missing[:4],
         },
+        "structuredAnalysis": {
+            "whyTheme": report_sections.get("why_theme") or {},
+            "industryChain": report_sections.get("industry_chain") or {},
+            "growthDrivers": report_sections.get("growth_drivers") or [],
+            "etfInvestmentAngle": report_sections.get("etf_investment_angle") or {},
+            "risks": report_sections.get("risks") or [],
+            "scenarios": report_sections.get("scenarios") or [],
+            "scorecard": report_sections.get("scorecard") or [],
+            "evidenceGaps": evidence_gaps,
+        },
     }
 
 @app.get("/api/reports/{report_id}/detail")
-def get_report_detail(report_id:str):
+def get_report_detail(report_id:str, version:int|None=Query(default=None,ge=1)):
     store = _report_store(report_id)
     try:
         report = store.report_asset(report_id)
         versions = store.report_versions(report_id) if report else []
         latest_market_snapshot = store.latest_etf_market_snapshot(report_id) if report else None
-        if versions:
-            run = {"result": (versions[0].get("payload") or {}).get("result") or {}}
+        selected_version = next((item for item in versions if item["version"] == version), None) if version else (versions[0] if versions else None)
+        if version and not selected_version:
+            raise HTTPException(404,"报告版本不存在")
+        if selected_version:
+            payload = selected_version.get("payload") or {}
+            run = {"result": payload.get("result") or {}}
+            frozen_asset = payload.get("asset") or {}
+            report = {
+                **report,
+                **frozen_asset,
+                "version": selected_version["version"],
+                "updated_at": selected_version.get("created_at") or report.get("updated_at"),
+            }
         else:
             run = store.research_run(report["run_id"]) if report and report.get("run_id") else None
     finally:
@@ -624,11 +835,8 @@ def refresh_report_market_snapshot(report_id: str):
     store = _report_store(report_id)
     try:
         report = store.report_asset(report_id)
-        parent = store.research_run(report["run_id"]) if report and report.get("run_id") else None
         if not report:
             raise HTTPException(404, "报告不存在或已经删除")
-        if parent and "etf_news" not in set((parent.get("request") or {}).get("sources") or []):
-            raise HTTPException(409, "原研究任务未授权 Yahoo ETF 行情来源")
         existing = next(
             (
                 run for run in store.research_runs(200)
@@ -646,7 +854,7 @@ def refresh_report_market_snapshot(report_id: str):
         created_at = utcnow()
         store.create_research_run(
             run_id, f"report-refresh:{report_id}", created_at,
-            {"report_id": report_id, "sources": ["etf_news"], "database_path": _run_database_path(report.get("run_id") or "")},
+            {"report_id": report_id, "sources": ["tiantian", "etf_news"], "refresh_workflow":"dual_source_deterministic", "database_path": _run_database_path(report.get("run_id") or "")},
             status="queued", stage="market_refresh", database_path=_run_database_path(report.get("run_id") or ""),
         )
     finally:
@@ -670,6 +878,54 @@ def get_report_versions(report_id:str):
     finally: store.close()
     return {"report_id":report_id,"versions":versions,"claims":claims}
 
+
+def _version_change_payload(left:dict,right:dict) -> dict:
+    left_result=(left.get("payload") or {}).get("result") or {}
+    right_result=(right.get("payload") or {}).get("result") or {}
+    left_sections=left_result.get("report_sections") or {}
+    right_sections=right_result.get("report_sections") or {}
+    left_scores={item.get("id"):item for item in left_sections.get("scorecard") or []}
+    right_scores={item.get("id"):item for item in right_sections.get("scorecard") or []}
+    score_changes=[]
+    for key in sorted(set(left_scores)|set(right_scores)):
+        before=left_scores.get(key) or {}; after=right_scores.get(key) or {}
+        if before.get("stars") != after.get("stars") or before.get("status") != after.get("status"):
+            score_changes.append({"id":key,"label":after.get("label") or before.get("label") or key,"before":before.get("stars"),"after":after.get("stars"),"before_status":before.get("status"),"after_status":after.get("status"),"reason":after.get("reason","")})
+    def etf_ids(sections:dict) -> set[str]:
+        return {str(item.get("ticker") or item.get("code") or "") for item in ((sections.get("etf_investment_angle") or {}).get("products") or []) if item.get("ticker") or item.get("code")}
+    left_etfs,right_etfs=etf_ids(left_sections),etf_ids(right_sections)
+    left_gaps={str(item.get("area") or "") for item in left_sections.get("evidence_gaps") or []}
+    right_gaps={str(item.get("area") or "") for item in right_sections.get("evidence_gaps") or []}
+    left_conclusion=left_result.get("conclusion") or {}; right_conclusion=right_result.get("conclusion") or {}
+    return {
+        "conclusion":{"before":left_conclusion.get("statement", ""),"after":right_conclusion.get("statement", ""),"verdict_before":left_conclusion.get("verdict"),"verdict_after":right_conclusion.get("verdict"),"changed":left_conclusion.get("statement") != right_conclusion.get("statement") or left_conclusion.get("verdict") != right_conclusion.get("verdict")},
+        "score_changes":score_changes,
+        "etfs_added":sorted(right_etfs-left_etfs),"etfs_removed":sorted(left_etfs-right_etfs),
+        "evidence_gaps_added":sorted(right_gaps-left_gaps),"evidence_gaps_closed":sorted(left_gaps-right_gaps),
+        "evidence_count_before":int(left_result.get("selected") or 0),"evidence_count_after":int(right_result.get("selected") or 0),
+    }
+
+
+@app.get("/api/reports/{report_id}/timeline")
+def report_version_timeline(report_id:str):
+    store=_report_store(report_id)
+    try:
+        if not store.report_asset(report_id): raise HTTPException(404,"报告不存在或已经删除")
+        versions=sorted(store.report_versions(report_id),key=lambda item:item["version"])
+    finally: store.close()
+    items=[]
+    for index,item in enumerate(versions):
+        result=(item.get("payload") or {}).get("result") or {}; conclusion=result.get("conclusion") or {}; sections=result.get("report_sections") or {}
+        change=_version_change_payload(versions[index-1],item) if index else None
+        tags=[]
+        if change:
+            if change["conclusion"]["changed"]: tags.append("结论变化")
+            if change["score_changes"]: tags.append("评分变化")
+            if change["etfs_added"] or change["etfs_removed"]: tags.append("ETF 格局变化")
+            if change["evidence_gaps_added"] or change["evidence_gaps_closed"]: tags.append("证据缺口变化")
+        items.append({"version":item["version"],"created_at":item["created_at"],"content_hash":item["content_hash"],"verdict":conclusion.get("verdict","insufficient"),"confidence":conclusion.get("confidence","low"),"conclusion":conclusion.get("statement",""),"scorecard":sections.get("scorecard") or [],"change_tags":tags,"change":change})
+    return {"report_id":report_id,"versions":list(reversed(items))}
+
 @app.get("/api/reports/{report_id}/compare")
 def compare_report_versions(report_id:str, left:int=Query(ge=1), right:int=Query(ge=1)):
     store=_report_store(report_id)
@@ -677,7 +933,7 @@ def compare_report_versions(report_id:str, left:int=Query(ge=1), right:int=Query
     finally: store.close()
     if left not in versions or right not in versions: raise HTTPException(404,"报告版本不存在")
     left_lines=set(versions[left]["markdown"].splitlines()); right_lines=set(versions[right]["markdown"].splitlines())
-    return {"report_id":report_id,"left":left,"right":right,"added":sorted(right_lines-left_lines),"removed":sorted(left_lines-right_lines),"unchanged_count":len(left_lines&right_lines)}
+    return {"report_id":report_id,"left":left,"right":right,"structured":_version_change_payload(versions[left],versions[right]),"added":sorted(right_lines-left_lines),"removed":sorted(left_lines-right_lines),"unchanged_count":len(left_lines&right_lines)}
 
 @app.patch("/api/reports/{report_id}")
 def update_report_asset(report_id:str, request:ReportUpdateRequest):
@@ -685,9 +941,6 @@ def update_report_asset(report_id:str, request:ReportUpdateRequest):
     store = _report_store(report_id)
     try:
         report = store.update_report_asset(report_id,title=request.title,status=request.status,updated_at=utcnow())
-        if report:
-            run=store.research_run(report.get("run_id", ""))
-            store.save_report_version(report_id,int(report["version"]),{"asset":report,"result":(run or {}).get("result",{})},str((run or {}).get("result",{}).get("report_markdown") or ""),utcnow())
     finally:
         store.close()
     if not report: raise HTTPException(404,"报告不存在或已经删除")
@@ -711,51 +964,66 @@ THEME_LIBRARY_META = {
 }
 
 def _register_theme_report(store:EvidenceStore, run_id:str, theme:str, result:dict) -> None:
+    publication_gate = ((result.get("audit") or {}).get("publication_gate") or {})
+    if not (result.get("audit") or {}).get("passed") or not publication_gate.get("passed"):
+        failed = publication_gate.get("failed_checks") or (result.get("audit") or {}).get("errors") or ["unknown"]
+        raise ValueError(f"报告未通过发布质量门槛：{', '.join(str(item) for item in failed)}")
     display_name=((result.get("theme_definition") or {}).get("name") or theme)
     title, folder, tags = THEME_LIBRARY_META.get(theme,(f"{display_name} 主题研究","ai",[display_name]))
     status = {"DEEP_RESEARCH":"deep_research","WATCH":"watch","REJECT":"completed"}.get(result.get("status"),"completed")
     brief = result.get("brief") or {}
     now = utcnow()
-    report_id=f"report:{run_id}"
-    output_type=result.get("output_type","theme_report")
-    suffix={"quick_scan":"快速扫描","etf_opportunity_analysis":"ETF 机会分析"}.get(output_type,"主题研究")
-    if output_type!="theme_report": title=f"{display_name} {suffix}"
+    report_id=f"theme-report:{theme}"
+    existing = store.report_asset(report_id)
+    version = int((existing or {}).get("version") or 0) + 1
+    created_at = (existing or {}).get("created_at") or now
+    summary = str((result.get("conclusion") or {}).get("statement") or "当前报告尚未形成可审计结论。")
     asset={
-        "report_id":report_id,"run_id":run_id,"title":title,"kind":output_type,"theme_id":theme,
-        "folder_id":folder,"status":status,"tags":tags,"summary":"由治理后证据生成的基金经理主题研究简报。",
-        "updated_at":now,"created_at":now,"version":1,"source_count":brief.get("source_types",0),
+        "report_id":report_id,"run_id":run_id,"title":title,"kind":"theme_report","theme_id":theme,
+        "folder_id":folder,"status":status,"tags":tags,"summary":summary,
+        "updated_at":now,"created_at":created_at,"version":version,"source_count":brief.get("source_types",0),
         "evidence_count":result.get("selected",0),"audit_passed":bool((result.get("audit") or {}).get("passed")),
     }
-    store.save_report_asset(asset)
-    store.save_report_version(report_id,1,{"asset":asset,"result":result},str(result.get("report_markdown") or ""),now)
-    for index, claim in enumerate(result.get("claims") or []):
-        store.save_report_claim(f"{report_id}:v1:c{index+1}",report_id,1,str(claim.get("text") or ""),str(claim.get("type") or "support"),[str(item) for item in claim.get("evidence_ids") or []],now)
+    payload = {"asset":asset,"result":result,"change_reason":"用户核实后发布的主题研究版本"}
+    claims = list(result.get("claims") or [])
+    if existing:
+        if not store.save_and_promote_report_version(
+            report_id, version, payload, str(result.get("report_markdown") or ""), now, claims,
+        ):
+            raise ValueError("报告版本已存在，请刷新后重试")
+    else:
+        store.save_report_asset(asset)
+        store.save_report_version(report_id,version,payload,str(result.get("report_markdown") or ""),now)
+        for index, claim in enumerate(claims):
+            store.save_report_claim(f"{report_id}:v{version}:c{index+1}",report_id,version,str(claim.get("text") or ""),str(claim.get("type") or "support"),[str(item) for item in claim.get("evidence_ids") or []],now)
 
 @app.post("/api/research-runs",status_code=202)
 def create_research_run(request:ResearchRequest):
     topic=(request.topic or request.theme or "").strip()
     if len(topic)<2: raise HTTPException(422,"研究主题至少需要两个字符")
-    if request.output_type not in {"theme_report","quick_scan","etf_opportunity_analysis"}: raise HTTPException(422,"不支持的研究输出类型")
+    if request.output_type != "theme_report":
+        raise HTTPException(422,"当前仅支持主题研究；快速扫描和 ETF 机会分析已停止创建")
     run_id=str(uuid4()); path=_db(request.database_path); store=EvidenceStore(path); created_at=utcnow()
-    payload=request.model_dump(); payload["topic"]=topic
+    payload=request.model_dump()
+    payload.update({
+        "topic":topic,
+        "objective":CORE_RESEARCH_OBJECTIVE,
+        "sources":list(AUTO_RESEARCH_SOURCES),
+        "time_range":"multi_horizon",
+        "output_type":"theme_report",
+        "source_selection":"automatic",
+    })
     queue_status = store.enqueue_theme_research_run(
         run_id, request.theme or "pending", created_at, payload, database_path=path,
     )
+    queued_run = store.research_run(run_id)
     store.close()
-    if queue_status == "full":
-        raise HTTPException(
-            409,
-            detail={
-                "code": "TASK_QUEUE_FULL",
-                "message": "当前已有 1 个活动任务和 1 个等待任务。请先结束或完成其中一个任务。",
-            },
-        )
     registry=_store()
     try: registry.register_run(run_id,path,created_at)
     finally: registry.close()
     if queue_status == "planning":
         worker_for(path)
-    return {"run_id":run_id,"status":queue_status,"queue_position":1 if queue_status == "waiting" else None,"poll_url":f"/api/research-runs/{run_id}"}
+    return {"run_id":run_id,"status":queue_status,"queue_position":(queued_run or {}).get("queue_position"),"poll_url":f"/api/research-runs/{run_id}"}
 
 @app.get("/api/research-runs")
 def list_research_runs(limit:int=Query(default=20,ge=1,le=100), offset:int=Query(default=0,ge=0)):
@@ -789,6 +1057,9 @@ def _research_run_snapshot(run_id:str) -> dict | None:
         if not item: return None
         item["steps"]=store.run_steps(run_id); item["approvals"]=store.approvals(run_id)
         item["agent_runs"]=store.agent_runs(run_id); item["tool_calls"]=store.tool_calls(run_id)
+        if item["stage"] == "collecting" and item["status"] in {"queued", "collecting"}:
+            completed_calls = sum(call.get("status") != "running" for call in item["tool_calls"])
+            item["progress"] = max(int(item.get("progress") or 0), min(44, 30 + completed_calls * 2))
         coverages = []
         for call in item["tool_calls"]:
             for value in (
@@ -834,6 +1105,21 @@ def _research_run_snapshot(run_id:str) -> dict | None:
                 "toolCalls": len(item["tool_calls"]),
             },
         }
+        item["stream_events"] = [
+            {
+                "id": int(call["tool_call_id"]),
+                "kind": "tool_call",
+                "name": str(call.get("tool_name") or ""),
+                "status": str(call.get("status") or ""),
+                "started_at": str(call.get("started_at") or ""),
+                "finished_at": str(call.get("finished_at") or ""),
+                "source": str((call.get("arguments") or {}).get("source") or ""),
+                "evidence_delta": int(call.get("evidence_delta") or 0),
+                "relevant_evidence_delta": int(call.get("relevant_evidence_delta") or 0),
+                "latency_ms": int(call.get("latency_ms") or 0),
+            }
+            for call in item["tool_calls"][-20:]
+        ]
         # Persisted snapshots expose structured outputs and audit records only.
         # Remove any accidental provider debug fields before SSE serialization.
         forbidden = {"chain_of_thought", "reasoning", "thought", "hidden_reasoning", "model_thoughts"}
@@ -882,13 +1168,18 @@ def review_theme(run_id:str, request:ReviewRequest):
     if not run or run["status"]!="awaiting_theme_review": store.close(); raise HTTPException(409,"当前不在主题复核阶段")
     if request.decision=="return":
         changed=store.transition_research_run(run_id,{"awaiting_theme_review"},status="returned",stage="theme_review",updated_at=utcnow(),result={**run["result"],"available_actions":["rerun"]},progress=12,review_gate="")
+        promoted = None
     else:
-        changed=store.transition_research_run(run_id,{"awaiting_theme_review"},status="queued",stage="collecting",updated_at=utcnow(),result={**run["result"],"available_actions":["cancel"]},progress=15,review_gate="")
+        changed, promoted = store.requeue_research_run(
+            run_id, {"awaiting_theme_review"}, stage_after_promotion="queued",
+            updated_at=utcnow(), result={**run["result"],"available_actions":["cancel"]},
+            progress=15, review_gate="", lease_owner="", lease_expires_at="", heartbeat_at="",
+        )
     if not changed: store.close(); raise HTTPException(409,"主题复核状态已被其他操作更新")
     store.save_approval(run_id,"theme_definition",request.decision,request.note,utcnow())
     if request.decision=="approve": store.save_theme_definition(run["result"]["theme_definition"],utcnow(),confirmed=True)
     store.close()
-    if request.decision=="approve": worker_for(path)
+    if request.decision=="approve" and promoted: worker_for(path)
     return get_research_run(run_id)
 
 @app.post("/api/research-runs/{run_id}/report-review")
@@ -896,6 +1187,12 @@ def review_report(run_id:str, request:ReviewRequest):
     store=_run_store(run_id); run=store.research_run(run_id)
     if not run or run["status"]!="awaiting_report_review": store.close(); raise HTTPException(409,"当前不在报告复核阶段")
     result={**run["result"]}
+    if request.decision == "approve":
+        gate = ((result.get("audit") or {}).get("publication_gate") or {})
+        if not (result.get("audit") or {}).get("passed") or not gate.get("passed"):
+            failed = gate.get("failed_checks") or (result.get("audit") or {}).get("errors") or ["报告结构或引用审计未通过"]
+            store.close()
+            raise HTTPException(409, {"message":"报告未通过发布质量门槛，只能要求补充研究","failed_checks":failed})
     if request.decision=="return":
         result["available_actions"]=["rerun"]
         changed=store.transition_research_run(run_id,{"awaiting_report_review"},status="returned",stage="report_review",updated_at=utcnow(),result=result,progress=92,review_gate="")
@@ -921,18 +1218,25 @@ def rerun_research(run_id:str):
     if not run or run["status"]!="returned": store.close(); raise HTTPException(409,"只有已退回任务可以重跑")
     next_attempt=int(run["attempt"])+1
     if run["stage"]=="theme_review":
-        changed=store.transition_research_run(run_id,{"returned"},status="planning",stage="planning",updated_at=utcnow(),result={},progress=0,review_gate="",attempt=next_attempt,lease_owner="",lease_expires_at="",heartbeat_at="")
+        resume_stage, result, progress = "planning", {}, 0
     else:
-        changed=store.transition_research_run(run_id,{"returned"},status="queued",stage="collecting",updated_at=utcnow(),result=run["result"],progress=15,review_gate="",attempt=next_attempt,lease_owner="",lease_expires_at="",heartbeat_at="")
+        resume_stage, result, progress = "queued", run["result"], 15
+    changed, promoted = store.requeue_research_run(
+        run_id, {"returned"}, stage_after_promotion=resume_stage,
+        updated_at=utcnow(), result=result, progress=progress, review_gate="",
+        attempt=next_attempt, lease_owner="", lease_expires_at="", heartbeat_at="",
+    )
     store.close()
     if not changed: raise HTTPException(409,"任务已被其他操作更新")
-    worker_for(path); return {"run_id":run_id,"status":"queued"}
+    if promoted: worker_for(path)
+    current = get_research_run(run_id)
+    return {"run_id":run_id,"status":current["status"],"queue_position":current.get("queue_position")}
 
 @app.post("/api/research-runs/{run_id}/cancel")
 def cancel_research(run_id:str):
     store=_run_store(run_id); run=store.research_run(run_id)
     if not run or run["status"] in {"completed","failed","cancelled"}: store.close(); raise HTTPException(409,"任务不可取消")
-    releases_slot = run["status"] != "waiting"
+    releases_slot = run["status"] in RESEARCH_EXECUTION_STATUSES
     changed, promoted = store.transition_and_promote(
         run_id, {run["status"]}, promote=releases_slot,
         status="cancelled", stage="cancelled", updated_at=utcnow(), result=run["result"],
@@ -976,6 +1280,9 @@ def get_research_report(run_id:str):
 
 @app.post("/api/event-research-runs", status_code=202)
 def create_event_research_run(request: EventResearchRequest):
+    raise HTTPException(410,"事件研究输出已停止创建；资讯证据仅作为主题研究的辅助输入")
+    # Legacy implementation is intentionally retained below for read compatibility
+    # and migration reference, but cannot be reached by new API requests.
     evidence_store = _store(request.database_path)
     try:
         if not any(item["event_id"] == request.evidence_id for item in evidence_store.events()):

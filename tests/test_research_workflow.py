@@ -70,7 +70,7 @@ def test_return_does_not_automatically_rerun(tmp_path: Path, monkeypatch) -> Non
     assert returned["result"]["available_actions"] == ["rerun"]
 
 
-def test_known_theme_etf_analysis_skips_theme_review(tmp_path: Path, monkeypatch) -> None:
+def test_known_theme_unified_research_skips_theme_review(tmp_path: Path, monkeypatch) -> None:
     db = tmp_path / "known-etf.db"
     store = EvidenceStore(db)
     try:
@@ -82,7 +82,7 @@ def test_known_theme_etf_analysis_skips_theme_review(tmp_path: Path, monkeypatch
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    created = create_research_run(ResearchRequest(topic="智能机器人", sources=[], output_type="etf_opportunity_analysis"))
+    created = create_research_run(ResearchRequest(topic="智能机器人", sources=[], output_type="theme_report"))
     generated = _wait_for(db, created["run_id"], "awaiting_report_review")
     store = EvidenceStore(db)
     try:

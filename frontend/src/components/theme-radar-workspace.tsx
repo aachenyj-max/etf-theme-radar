@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, FilterX, LoaderCircle, Radar, RefreshCw, ShieldCheck } from "lucide-react";
 import { ThemeRadarCard } from "@/components/theme-radar-card";
+import { ThemeCandidateCard } from "@/components/theme-candidate-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ThemeRadarFilters, ThemeRadarLoadState, ThemeRadarSnapshot } from "@/lib/theme-radar";
@@ -81,7 +82,7 @@ export function ThemeRadarWorkspace() {
             <p className="mt-1 text-xs text-muted/70">Track emerging investment opportunities before they become crowded.</p>
           </div>
           <div className="flex items-center gap-6 border-l-2 border-signal pl-5 text-sm">
-            <div><p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{snapshot?.themes.length ?? "—"}</p><p className="mt-1 text-xs text-muted">当前主题</p></div>
+            <div><p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{snapshot?.candidates.length ?? "—"}</p><p className="mt-1 text-xs text-muted">待验证信号</p></div>
             <div><p className="text-2xl font-semibold tracking-[-0.04em] text-signal">{emergingCount}</p><p className="mt-1 text-xs text-muted">信号上升</p></div>
             <div><p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{deepResearchCount}</p><p className="mt-1 text-xs text-muted">深度研究</p></div>
           </div>
@@ -103,6 +104,11 @@ export function ThemeRadarWorkspace() {
         <div className="flex flex-wrap items-center gap-4"><span className="flex items-center gap-1.5 text-signal">↗ 上升 Emerging</span><span className="text-ink/70">→ 稳定 Stable</span><span className="text-amber">↘ 降温 Cooling</span></div>
         <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-signal" />{snapshot?.coverageNote ?? "正在读取主题覆盖"}</span>
       </div>
+
+      {snapshot && snapshot.candidates.length > 0 && <section className="mt-6" aria-labelledby="candidate-signals-title">
+        <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber">Discovery queue</p><h2 id="candidate-signals-title" className="mt-1 text-2xl font-semibold tracking-[-0.04em] text-ink">待验证主题信号</h2></div><p className="max-w-lg text-right text-xs leading-5 text-muted">只展示跨证据聚类；通过可信度门槛后才参与排序，人工确认后才进入正式主题池。</p></div>
+        <div className="space-y-4">{snapshot.candidates.filter((item) => !["confirmed", "merged", "rejected"].includes(item.status)).map((candidate) => <ThemeCandidateCard key={candidate.candidate_id} candidate={candidate} themes={snapshot.themes} onReviewed={() => setRefreshKey((value) => value + 1)} />)}</div>
+      </section>}
 
       <section className="mt-5" aria-live="polite">
         {(loadState === "idle" || loadState === "loading") && <LoadingMap />}

@@ -123,6 +123,7 @@ export const mockThemeRadarGateway: ThemeRadarGateway = {
       state: themes.length ? "ready" : "empty",
       filters,
       themes,
+      candidates: [],
       totalBeforeFilters: mockThemeOpportunities.length,
       generatedAt: new Date().toISOString(),
       coverageNote: `${filters.period === "30d" ? "30 日" : filters.period === "90d" ? "90 日" : "1 年"}观察窗口 · 仅包含已治理证据`
@@ -133,7 +134,8 @@ export const mockThemeRadarGateway: ThemeRadarGateway = {
     const theme = mockThemeOpportunities.find((item) => item.id === themeId);
     if (!theme) throw new Error("主题不存在或已被归档。");
     return theme;
-  }
+  },
+  async reviewCandidate() { throw new Error("演示数据不支持候选复核。"); }
 };
 
 export const themeRadarGateway: ThemeRadarGateway = {
@@ -142,7 +144,7 @@ export const themeRadarGateway: ThemeRadarGateway = {
     const response = await fetch(`/api/themes?${params.toString()}`, { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`主题接口返回 ${response.status}`);
     const payload = await response.json() as Omit<ThemeRadarSnapshot, "state" | "filters">;
-    return { ...payload, state: payload.themes.length ? "ready" : "empty", filters };
+    return { ...payload, candidates: payload.candidates ?? [], state: payload.themes.length || payload.candidates?.length ? "ready" : "empty", filters };
   },
   async getTheme(themeId) {
     const response = await fetch(`/api/themes?period=1y`);
@@ -151,5 +153,15 @@ export const themeRadarGateway: ThemeRadarGateway = {
     const theme = payload.themes.find((item) => item.id === themeId || item.slug === themeId);
     if (!theme) throw new Error("主题不存在或尚无治理后证据。");
     return theme;
+  },
+  async reviewCandidate(candidateId, decision, targetThemeId = "") {
+    const response = await fetch(`/api/theme-candidates/${encodeURIComponent(candidateId)}/review`, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ decision, target_theme_id: targetThemeId })
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { detail?: string };
+      throw new Error(payload.detail ?? `候选复核接口返回 ${response.status}`);
+    }
   }
 };

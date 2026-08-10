@@ -1,0 +1,48 @@
+{
+  "source_name": "天天基金网",
+  "catalog_url": "https://fund.eastmoney.com/js/fundcode_search.js",
+  "market_table_url": "https://fund.eastmoney.com/cnjy_zrljjz.html",
+  "fund_page_template": "https://fund.eastmoney.com/{code}.html",
+  "profile_template": "https://fundf10.eastmoney.com/jbgk_{code}.html",
+  "tracking_template": "https://fundf10.eastmoney.com/tsdata_{code}.html",
+  "holdings_template": "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline=10&year={year}&month=4",
+  "trend_template": "https://fund.eastmoney.com/pingzhongdata/{code}.js",
+  "quote_template": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={market}.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&beg=20250101&end=20500101&lmt=30",
+  "schedule": {
+    "timezone": "Asia/Shanghai",
+    "weekdays_only": true,
+    "hour": 8,
+    "minute": 0
+  },
+  "network": {
+    "timeout_seconds": 12,
+    "throttle_seconds": 0.15,
+    "dynamic_cache_ttl_seconds": 1800,
+    "profile_cache_ttl_seconds": 21600,
+    "user_agent": "ETFThemeRadar/1.0 public-research-contact=local"
+  },
+  "classification": {
+    "sp500_terms": ["标普500", "标准普尔500"],
+    "exchange_us_terms": ["标普500", "纳指", "纳斯达克", "道琼斯", "美国50", "美国科技", "美国消费", "美国生物", "美国医药", "美国油气", "标普消费", "标普科技", "标普生物", "标普油气"],
+    "active_us_candidate_terms": ["美国", "美股", "纳斯达克", "全球", "环球", "海外", "港美"],
+    "active_equity_types": ["QDII-普通股票", "QDII-混合偏股", "QDII-混合灵活", "QDII-REITs"],
+    "active_excluded_region_terms": ["中国", "大中华", "香港", "港股", "亚洲", "亚太", "日本", "印度", "越南", "欧洲", "新兴市场"],
+    "active_profile_us_terms": ["主要投资美国", "Russell 1000", "Russell1000"],
+    "active_holdings_min_us_count": 5,
+    "active_holdings_min_us_share": 0.5,
+    "active_target_minimum": 20,
+    "excluded_share_terms": ["美元", "美汇", "美钞", "港币", "后端"],
+    "exchange_code_prefixes": ["15", "51", "52", "56", "58"]
+  },
+  "premium_thresholds": {
+    "attention": 1.0,
+    "elevated": 2.0,
+    "high": 3.0
+  },
+  "manual_overrides": {
+    "include": [],
+    "exclude_codes": [],
+    "category_by_code": {},
+    "c_share_by_a_code": {}
+  }
+}

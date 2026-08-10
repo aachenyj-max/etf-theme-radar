@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from etf_theme_radar.etf_market import calculate_market_metrics, collect_market_snapshot, match_competitors
+from etf_theme_radar.etf_market import calculate_market_metrics, collect_dual_source_market_snapshot, collect_market_snapshot, match_competitors
 from etf_theme_radar.etf_discovery import verify_etf_candidate
 from etf_theme_radar.store import EvidenceStore
 from etf_theme_radar.workflow import execute_market_refresh
@@ -66,6 +66,34 @@ def test_global_market_uses_yahoo_symbol_and_local_currency(tmp_path: Path) -> N
     assert "不同币种" in snapshot["limitations"][-1]
 
 
+def test_market_collection_treats_empty_yahoo_response_as_failure(tmp_path: Path) -> None:
+    snapshot = collect_market_snapshot(
+        [{"ticker": "BOTZ", "issuer": "Global X", "category": "机器人"}],
+        tmp_path / "empty-cache", lambda _ticker: [],
+    )
+
+    assert snapshot["status"] == "unknown"
+    assert snapshot["products"][0]["data_status"] == "unavailable"
+    assert "未返回" in snapshot["products"][0]["error"]
+    assert not (tmp_path / "empty-cache" / "botz-history.json").exists()
+
+
+def test_empty_legacy_cache_is_replaced_by_one_live_attempt(tmp_path: Path) -> None:
+    cache = tmp_path / "legacy-empty-cache"
+    cache.mkdir()
+    (cache / "botz-history.json").write_text("[]", encoding="utf-8")
+    requests: list[str] = []
+
+    snapshot = collect_market_snapshot(
+        [{"ticker": "BOTZ", "issuer": "Global X", "category": "机器人"}],
+        cache, lambda ticker: requests.append(ticker) or _rows(),
+    )
+
+    assert requests == ["BOTZ"]
+    assert snapshot["products"][0]["data_status"] == "available"
+    assert snapshot["products"][0]["cache_status"] == "miss"
+
+
 def test_dynamic_candidate_requires_official_page_and_listing_metadata() -> None:
     valid = verify_etf_candidate({
         "ticker": "URA", "yahoo_symbol": "URA", "fund_name": "Uranium ETF",
@@ -110,8 +138,8 @@ def test_market_refresh_creates_independent_snapshot_without_changing_report(tmp
     )
     store.close()
     monkeypatch.setattr(
-        "etf_theme_radar.workflow.collect_market_snapshot",
-        lambda *_args, **_kwargs: {"status": "available", "market_as_of": "2026-07-31", "products": [{"ticker": "BOTZ"}]},
+        "etf_theme_radar.workflow.collect_dual_source_market_snapshot",
+        lambda *_args, **_kwargs: {"status": "partial", "market_as_of": "2026-07-31", "products": [{"ticker": "BOTZ", "data_status": "available"}], "source_status": {"yfinance": {"status": "available"}, "tiantian": {"status": "not_assessed"}}},
     )
 
     execute_market_refresh(str(database), "refresh")
@@ -142,3 +170,38 @@ def test_market_failure_uses_last_successful_cache(tmp_path: Path) -> None:
     assert second["products"][0]["data_status"] == "stale"
     assert second["products"][0]["cache_status"] == "stale_if_error"
     assert second["products"][0]["last_close"] == first["products"][0]["last_close"]
+
+
+def test_dual_source_snapshot_preserves_field_provenance_and_conflicts(tmp_path: Path) -> None:
+    snapshot = collect_dual_source_market_snapshot(
+        [{"ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF", "currency": "CNY"}],
+        {
+            "snapshot_id": "tiantian-1", "status": "available", "market_as_of": "2026-08-04",
+            "products": [{"code": "513100", "name": "纳指ETF", "scale_billion": 20, "operating_fee": .8, "source_url": "https://fund.eastmoney.com/513100.html"}],
+        },
+        tmp_path / "dual-cache", lambda _ticker: _rows(),
+    )
+    product = snapshot["products"][0]
+    assert {item["name"] for item in product["sources"]} == {"Yahoo Finance via yfinance", "天天基金网"}
+    assert product["field_provenance"]["last_close"] == "yfinance"
+    assert product["field_provenance"]["operating_fee"] == "tiantian"
+    assert product["cross_source_validation"]["status"] == "conflict"
+    assert snapshot["validation_summary"]["conflict"] == 1
+
+
+def test_failed_dual_refresh_does_not_overwrite_last_successful_snapshot(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "retain.db"
+    store = EvidenceStore(database)
+    created = "2026-07-31T00:00:00+00:00"
+    asset = {"report_id":"report:retain","run_id":"parent","title":"报告","kind":"theme_report","theme_id":"robotics","folder_id":"robotics","status":"watch","tags":[],"summary":"摘要","updated_at":created,"created_at":created,"version":1,"source_count":1,"evidence_count":1,"audit_passed":True}
+    store.save_report_asset(asset)
+    store.save_report_version("report:retain",1,{"asset":asset,"result":{"detail":{"landscape":{"similar_etfs":[]}}}},"v1",created)
+    store.save_etf_market_snapshot({"snapshot_id":"good","report_id":"report:retain","collected_at":created,"market_as_of":"2026-07-31","status":"available","products":[{"ticker":"BOTZ"}],"payload":{"products":[{"ticker":"BOTZ"}]}})
+    store.create_research_run("failed-refresh","report-refresh:report:retain",created,{"report_id":"report:retain"},status="queued",stage="market_refresh",database_path=str(database))
+    store.close()
+    monkeypatch.setattr("etf_theme_radar.workflow.collect_dual_source_market_snapshot",lambda *_args,**_kwargs:{"status":"unknown","products":[],"source_status":{"yfinance":{"status":"unknown"},"tiantian":{"status":"not_assessed"}}})
+    execute_market_refresh(str(database),"failed-refresh")
+    store=EvidenceStore(database)
+    assert store.latest_etf_market_snapshot("report:retain")["snapshot_id"] == "good"
+    assert store.research_run("failed-refresh")["status"] == "failed"
+    store.close()

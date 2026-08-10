@@ -1,0 +1,12 @@
+services:
+  caddy:
+    environment:
+      RADAR_DOMAIN: ${RADAR_DOMAIN:?Set RADAR_DOMAIN in deploy/.env.production}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile.public:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config

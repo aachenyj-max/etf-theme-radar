@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import pytest
 
 from etf_theme_radar.browser_mcp import sanitize_untrusted_text
 from etf_theme_radar.models import NormalizedEvent
@@ -39,14 +40,15 @@ def test_theme_trend_requires_two_comparable_snapshots(tmp_path: Path) -> None:
     store.close()
 
 
-def test_quick_scan_and_etf_output_are_real_but_preserve_unknowns(tmp_path: Path) -> None:
+def test_only_unified_theme_output_is_created_and_preserves_unknowns(tmp_path: Path) -> None:
     store = EvidenceStore(tmp_path / "outputs.db")
     store.save_event(_event("one")); store.commit()
-    quick = run_research_output(store, "robotics", tmp_path / "quick", "quick-run", None, output_type="quick_scan", theme_name="机器人", aliases=["robotics"])
-    etf = run_research_output(store, "robotics", tmp_path / "etf", "etf-run", None, output_type="etf_opportunity_analysis", theme_name="机器人", aliases=["robotics"])
-    assert quick["output_type"] == "quick_scan" and "快速扫描" in quick["report_markdown"]
-    assert etf["etf_opportunity"]["status"] == "insufficient_data"
-    assert etf["etf_opportunity"]["liquidity"] == "not_assessed"
+    with pytest.raises(ValueError, match="仅支持统一主题研究"):
+        run_research_output(store, "robotics", tmp_path / "quick", "quick-run", None, output_type="quick_scan", theme_name="机器人", aliases=["robotics"])
+    report = run_research_output(store, "robotics", tmp_path / "report", "theme-run", None, output_type="theme_report", theme_name="机器人", aliases=["robotics"], approved_sources=[])
+    assert report["output_type"] == "theme_report"
+    assert len(report["report_sections"]["scenarios"]) == 3
+    assert report["report_sections"]["scorecard"][4]["status"] == "not_assessed"
     store.close()
 
 

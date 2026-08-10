@@ -416,16 +416,13 @@ def _build_research_agent(config: ModelConfig, model_override: Any = None) -> Ag
 def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: dict[str, Any]) -> dict[str, Any]:
     config = model_config()
     agent_run_id = str(uuid4())
-    output_type = run.get("request", {}).get("output_type")
-    quick_scan = output_type == "quick_scan"
-    etf_fast = output_type == "etf_opportunity_analysis"
     default_tools = int(AGENT_DEFAULTS.get("max_tool_calls", 12))
     default_requests = int(AGENT_DEFAULTS.get("max_model_requests", 6))
     default_seconds = int(AGENT_DEFAULTS.get("max_seconds", 480))
     budget = AgentBudget(
-        max_tool_calls=int(AGENT_DEFAULTS.get("etf_fast_max_tool_calls", 8)) if etf_fast else min(6, int(os.getenv("AGENT_MAX_TOOL_CALLS", str(default_tools)))) if quick_scan else int(os.getenv("AGENT_MAX_TOOL_CALLS", str(default_tools))),
-        max_model_requests=int(AGENT_DEFAULTS.get("etf_fast_max_model_requests", 4)) if etf_fast else min(4, int(os.getenv("AGENT_MAX_MODEL_REQUESTS", str(default_requests)))) if quick_scan else int(os.getenv("AGENT_MAX_MODEL_REQUESTS", str(default_requests))),
-        max_seconds=int(AGENT_DEFAULTS.get("etf_fast_max_seconds", 240)) if etf_fast else int(os.getenv("AGENT_MAX_SECONDS", str(default_seconds))),
+        max_tool_calls=min(default_tools, int(os.getenv("AGENT_MAX_TOOL_CALLS", str(default_tools)))),
+        max_model_requests=min(default_requests, int(os.getenv("AGENT_MAX_MODEL_REQUESTS", str(default_requests)))),
+        max_seconds=min(default_seconds, int(os.getenv("AGENT_MAX_SECONDS", str(default_seconds)))),
         max_total_tokens=int(os.getenv("AGENT_MAX_TOTAL_TOKENS", str(int(AGENT_DEFAULTS.get("max_total_tokens", 24000))))),
         max_cost_usd=float(os.getenv("AGENT_MAX_COST_USD", str(AGENT_DEFAULTS.get("max_cost_usd", .5)))),
         estimated_cost_per_million_tokens=float(os.getenv("LLM_ESTIMATED_COST_PER_MILLION_TOKENS", str(AGENT_DEFAULTS.get("estimated_cost_per_million_tokens", 2.0)))),
@@ -444,8 +441,8 @@ def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: di
     planning = {
         "questions": definition.get("research_questions", []),
         "approved_sources": run["request"].get("sources", []),
-        "profile": "etf_fast_240s" if etf_fast else "quick_scan" if quick_scan else "standard",
-        "source_priority": ["existing_cache", "etf_holdings", "etf_news", "sec", "arxiv", "company_careers", "patents", "counter_search"] if etf_fast else [],
+        "profile": "unified_theme_research",
+        "source_priority": ["existing_cache", "official_etf_holdings", "tiantian", "yfinance", "sec", "arxiv", "company_careers", "patents_if_needed", "counter_search"],
         "limits": {"seconds": budget.max_seconds, "tool_calls": budget.max_tool_calls, "model_requests": budget.max_model_requests},
     }
     store.save_step(run["run_id"], run["attempt"], "query_planning", "succeeded", started_at=utcnow(), finished_at=utcnow(), details=planning)
@@ -458,6 +455,7 @@ def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: di
         store.finish_tool_call(call_id, status="succeeded", finished_at=utcnow(), result={"status": "accepted", "stop_reason": "tools_unavailable"})
         store.save_step(run["run_id"], run["attempt"], "synthesis", "succeeded", started_at=utcnow(), finished_at=utcnow(), details={"fallback": "deterministic", "remaining_gaps": ["模型未配置"]})
         return {"enabled": False, "status": "skipped", "stop_reason": "model_not_configured", "counter_search_completed": False, "coverage": initial_coverage}
+    store.close_interrupted_agent_runs(run["run_id"], utcnow())
     store.create_agent_run({**base, "status": "running"})
     deps = ResearchAgentDeps(store, run["run_id"], run["attempt"], agent_run_id, run["request"], definition, budget)
     prompt = json.dumps({
@@ -465,7 +463,7 @@ def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: di
         "request": run["request"],
         "current_coverage": evidence_coverage(store, definition),
         "runtime_profile": planning,
-        "execution_instruction": "ETF 快速档必须先查缓存，再查官方持仓和 Yahoo ETF 公开资讯；仅在证据缺口仍存在时补 Google Patents 或一次反方检索，并在预算内调用 finish_research。" if etf_fast else "在预算内完成反方检查并调用 finish_research。",
+        "execution_instruction": "先复用现有证据与 ETF 缓存，再按产业动量和 ETF 格局缺口采集；必须完成一次反方检查，并在统一预算内调用 finish_research。",
     }, ensure_ascii=False)
     try:
         result = _build_research_agent(config).run_sync(
@@ -485,7 +483,11 @@ def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: di
         return {"enabled": True, "status": "succeeded", **result.output.model_dump(), "stop_reason": stop_reason, "counter_search_completed": deps.counter_search_completed, "coverage": evidence_coverage(store, definition), "usage": {"requests": usage.requests, "tool_calls": budget.tool_calls, "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}}
     except Exception as exc:
         message = str(exc)
-        if "request_limit" in message and "exceed" in message:
+        budget_boundary = "exceed" in message.casefold() and any(
+            token in message.casefold()
+            for token in ("request_limit", "tool_calls_limit", "total_tokens_limit")
+        )
+        if budget_boundary:
             current_calls = [item for item in store.tool_calls(run["run_id"]) if int(item.get("attempt") or 0) == int(run["attempt"])]
             counter_attempted = deps.counter_search_completed or any(
                 item.get("arguments", {}).get("purpose") == "counter" or item.get("arguments", {}).get("counter_evidence") is True
@@ -522,7 +524,7 @@ def run_research_agent(store: EvidenceStore, run: dict[str, Any], definition: di
                 details={"stop_reason": "budget_exhausted", "remaining_gaps": remaining_gaps, "fallback": "deterministic_guardrail"},
             )
             return {
-                "enabled": True, "status": "succeeded", "summary": "已在 ETF 快速档预算边界停止，并保留未满足的证据缺口。",
+                "enabled": True, "status": "succeeded", "summary": "已在统一主题研究预算边界停止，并保留未满足的证据缺口。",
                 "stop_reason": "budget_exhausted", "counter_search_completed": deps.counter_search_completed,
                 "counter_search_attempted": counter_attempted, "remaining_gaps": remaining_gaps,
                 "coverage": evidence_coverage(store, definition),

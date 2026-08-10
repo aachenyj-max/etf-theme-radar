@@ -30,9 +30,9 @@ def _entity_id(name: str, ticker: str = "") -> str:
 
 
 def refresh_entities(store: EvidenceStore) -> dict[str, int]:
-    created = 0
-    linked = 0
     now = utcnow()
+    entities: dict[str, dict] = {}
+    links: dict[str, dict] = {}
     for event in store.events():
         theme_id = str(event.get("primary_theme") or "unknown")
         pairs: list[tuple[str, str]] = [(name, "") for name in _items(event.get("companies"))]
@@ -41,20 +41,20 @@ def refresh_entities(store: EvidenceStore) -> dict[str, int]:
             pairs.append((str(event["company_id"]), ""))
         for name, ticker in dict.fromkeys(pairs):
             entity_id = _entity_id(name, ticker)
-            store.save_entity({
+            entities[entity_id] = {
                 "entity_id": entity_id, "entity_type": "listed_company" if ticker else "company",
                 "canonical_name": name, "ticker": ticker, "exchange": "unknown",
                 "review_status": "needs_review", "aliases": [name], "created_at": now, "updated_at": now,
-            })
-            created += 1
-            store.save_entity_link({
-                "link_id": sha256(f"{entity_id}:{event['event_id']}:{theme_id}".encode()).hexdigest(),
+            }
+            link_id = sha256(f"{entity_id}:{event['event_id']}:{theme_id}".encode()).hexdigest()
+            links[link_id] = {
+                "link_id": link_id,
                 "entity_id": entity_id, "event_id": event["event_id"], "theme_id": theme_id,
                 "relation_type": "mentioned", "confidence": float(event.get("classification_confidence") or .5),
                 "review_status": "needs_review", "created_at": now,
-            })
-            linked += 1
-    return {"entities_processed": created, "links_processed": linked}
+            }
+    store.save_entities_and_links(list(entities.values()), list(links.values()))
+    return {"entities_processed": len(entities), "links_processed": len(links)}
 
 
 def _signal(count: int, scale: float) -> float:
@@ -116,5 +116,20 @@ def refresh_theme_snapshots(store: EvidenceStore, as_of_date: str | None = None)
 
 
 def refresh_research_assets(store: EvidenceStore, as_of_date: str | None = None) -> dict:
+    from .theme_discovery import discover_theme_candidates
     with MAINTENANCE_LOCK:
-        return {"entity_resolution": refresh_entities(store), "theme_snapshots": refresh_theme_snapshots(store, as_of_date)}
+        as_of = date.fromisoformat(as_of_date) if as_of_date else None
+        return {
+            "entity_resolution": refresh_entities(store),
+            "theme_snapshots": refresh_theme_snapshots(store, as_of_date),
+            "theme_discovery": discover_theme_candidates(store, as_of=as_of),
+        }
+
+
+def refresh_run_assets(store: EvidenceStore, as_of_date: str | None = None) -> dict:
+    """Refresh only assets consumed by an ordinary research run."""
+    with MAINTENANCE_LOCK:
+        return {
+            "entity_resolution": refresh_entities(store),
+            "theme_snapshots": refresh_theme_snapshots(store, as_of_date),
+        }

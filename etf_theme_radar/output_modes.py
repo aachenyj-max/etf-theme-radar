@@ -3,15 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from .store import EvidenceStore
-from .theme_research import run_theme_research
-from .etf_market import collect_market_snapshot, match_competitors, minimum_verified_etfs
+from .theme_research import _publication_gate, run_theme_research
+from .etf_market import collect_dual_source_market_snapshot, match_competitors, minimum_verified_etfs
 from .etf_discovery import discover_global_etfs
+from .etf_preview import match_theme_preview_products
 
 
 def run_research_output(
     store: EvidenceStore, theme_id: str, output: Path, run_id: str, llm_config: dict | None,
     *, output_type: str, theme_name: str, aliases: list[str], approved_sources: list[str] | None = None,
 ) -> dict:
+    if output_type != "theme_report":
+        raise ValueError("当前仅支持统一主题研究输出")
     discovered = {"candidates": [], "remaining_gaps": [], "status": "not_needed"}
     configured = match_competitors(theme_id, theme_name, aliases)
     if len(configured) < minimum_verified_etfs() and "etf_news" in set(approved_sources or []):
@@ -27,41 +30,48 @@ def run_research_output(
     result["etf_discovery"] = discovered
     result["output_type"] = output_type
     landscape = (result.get("detail") or {}).get("landscape") or {}
+    landscape["theme_etf_snapshot"] = match_theme_preview_products(
+        store.latest_etf_preview_snapshot(), theme_id, theme_name, aliases,
+    )
     competitors = landscape.get("similar_etfs") or []
     if competitors and "etf_news" in set(approved_sources or []):
-        landscape["market_snapshot"] = collect_market_snapshot(
-            competitors, Path("data/cache/yahoo-etf-market")
+        landscape["market_snapshot"] = collect_dual_source_market_snapshot(
+            competitors, landscape["theme_etf_snapshot"], Path("data/cache/yahoo-etf-market"),
+            fetcher=lambda _symbol: (_ for _ in ()).throw(
+                RuntimeError("报告生成仅复用成功缓存；实时行情由独立手动刷新 Worker 获取")
+            ),
         )
     else:
         landscape["market_snapshot"] = {
             "market_as_of": "", "status": "unknown", "products": [],
             "limitations": ["未获准使用 ETF 行情来源，市场指标保持未核验。"],
         }
-    if output_type == "quick_scan":
-        brief = result.get("brief") or {}
-        gaps = ((result.get("detail") or {}).get("counter") or {}).get("missing_evidence") or []
-        lines = [
-            f"# {theme_name}｜快速扫描", "",
-            f"- 已治理证据：{result.get('selected', 0)} 条；来源类型：{brief.get('source_types', 0)}。",
-            f"- 当前状态：{result.get('status', 'WATCH')}；本输出仅作线索初筛。", "",
-            "## 重点证据",
-        ]
-        for item in (brief.get("key_evidence") or [])[:3]:
-            lines.append(f"- [{item['claim']}]({item['source_url']})（证据 ID：`{item['evidence_id']}`）")
-        lines += ["", "## 证据缺口", *[f"- {gap}" for gap in gaps[:6]], "", "不得将快速扫描视为投资或 ETF 产品建议。"]
-        result["report_markdown"] = "\n".join(lines)
-        (output / f"{theme_id}-quick-scan.md").write_text(result["report_markdown"], encoding="utf-8")
-    elif output_type == "etf_opportunity_analysis":
-        investability = (result.get("detail") or {}).get("investability") or {}
-        result["etf_opportunity"] = {
-            "status": "requires_human_review" if landscape.get("overlap_status") == "available" and investability.get("investability_status") != "insufficient_data" else "insufficient_data",
-            "competitor_count": landscape.get("competitor_count", 0),
-            "official_holdings_covered": landscape.get("official_holdings_covered", []),
-            "holdings_overlap": landscape.get("holdings_overlap", []),
-            "investability_status": investability.get("investability_status", "insufficient_data"),
-            "index_rules": "not_assessed", "liquidity": "not_assessed",
-            "limitations": ["指数规则与流动性尚未完成官方逐项核验；不得据此启动产品。"],
-        }
-        result["report_markdown"] += "\n\n## ETF 机会分析附录\n" + f"- 竞品配置：{landscape.get('competitor_count', 0)} 只。\n- 官方持仓覆盖：{len(landscape.get('official_holdings_covered', []))} 只。\n- 机会状态：{result['etf_opportunity']['status']}。"
-        (output / f"{theme_id}-etf-opportunity.md").write_text(result["report_markdown"], encoding="utf-8")
+    sections = result.get("report_sections") or {}
+    etf_angle = sections.get("etf_investment_angle") or {}
+    etf_angle["products"] = list((landscape.get("market_snapshot") or {}).get("products") or [])
+    etf_angle["no_suitable_etf"] = not bool(etf_angle["products"])
+    sections["etf_investment_angle"] = etf_angle
+    result["report_sections"] = sections
+    preview = landscape["theme_etf_snapshot"]
+    preview_lines = [
+        "", "## 主题相关 ETF 现状（冻结快照）",
+        f"- 快照日期：{preview.get('market_as_of') or '未核验'}；匹配产品：{preview.get('matched_count', 0)} 只。",
+    ]
+    for product in (preview.get("products") or [])[:10]:
+        preview_lines.append(
+            f"- {product.get('code')} · {product.get('name')}；规模 {product.get('scale_billion') if product.get('scale_billion') is not None else '未核验'} 亿元；近一年 {product.get('rolling_1y') if product.get('rolling_1y') is not None else '未核验'}%。"
+        )
+    preview_lines.append("- 仅按主题名称、别名及跟踪指数做确定性关联；未核验持仓时不推断实际主题暴露，也不构成投资建议。")
+    result["report_markdown"] = str(result.get("report_markdown") or "") + "\n".join(preview_lines)
+    audit = result.get("audit") or {}
+    previous_gate = audit.get("publication_gate") or {}
+    base_errors = [
+        item for item in audit.get("errors") or []
+        if item not in set(previous_gate.get("failed_checks") or [])
+    ]
+    publication_gate = _publication_gate(result)
+    audit["publication_gate"] = publication_gate
+    audit["errors"] = [*base_errors, *publication_gate["failed_checks"]]
+    audit["passed"] = not audit["errors"]
+    result["audit"] = audit
     return result

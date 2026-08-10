@@ -50,6 +50,9 @@ class DurableWorker:
     def run_once(self) -> bool:
         store = EvidenceStore(self.database_path)
         try:
+            # Attention states never occupy the execution slot. Recover any
+            # persisted waiter left behind by a restart before claiming work.
+            store.promote_waiting_run(_timestamp())
             run = store.claim_next_run(self.owner, _timestamp(), _timestamp(self.lease_seconds))
         finally:
             store.close()

@@ -47,6 +47,52 @@ export interface EtfMarketProduct {
   price_trend?: "up" | "down" | "sideways";
   relative_strength_1m?: number | null;
   error?: string;
+  sources?: string[];
+  field_provenance?: Record<string, string>;
+  cross_source_validation?: {
+    status: "consistent" | "conflict" | "single_source" | "not_comparable";
+    comparable_fields?: string[];
+    conflicts?: Array<{ field?: string; left?: unknown; right?: unknown }>;
+  };
+}
+
+export interface EvidenceGapDetail {
+  area: string;
+  gap: string;
+  why_missing: string;
+  impact: string;
+  next_action: string;
+  status: string;
+}
+
+export interface ReportVersionSummary {
+  version: number;
+  created_at: string;
+  content_hash: string;
+  verdict?: string;
+  confidence?: string;
+  conclusion?: string;
+  change_tags?: string[];
+  change?: ReportVersionComparison["structured"] | null;
+}
+
+export interface ReportVersionComparison {
+  report_id: string;
+  left: number;
+  right: number;
+  added: string[];
+  removed: string[];
+  unchanged_count: number;
+  structured: {
+    conclusion: { before: string; after: string; verdict_before?: string; verdict_after?: string; changed: boolean };
+    score_changes: Array<{ id: string; label: string; before?: number | null; after?: number | null; reason?: string }>;
+    etfs_added: string[];
+    etfs_removed: string[];
+    evidence_gaps_added: string[];
+    evidence_gaps_closed: string[];
+    evidence_count_before: number;
+    evidence_count_after: number;
+  };
 }
 
 export interface ReportMemoDetail {
@@ -66,6 +112,7 @@ export interface ReportMemoDetail {
     statement: string;
     keyEvidenceIds: string[];
     limitations: string[];
+    evidenceGaps?: EvidenceGapDetail[];
     modelUsed: boolean;
   };
   executiveSummary: string;
@@ -120,10 +167,22 @@ export interface ReportMemoDetail {
     rationale: string;
     nextActions: string[];
   };
+  structuredAnalysis?: {
+    whyTheme?: { selection_reason?: string; potential?: string; evidence_basis?: string[] };
+    industryChain?: { priority_logic?: string; segments?: Array<{ name?: string; potential?: string; rationale?: string; pricing_power?: string }> };
+    growthDrivers?: Array<string | { driver?: string; mechanism?: string; evidence?: string }>;
+    etfInvestmentAngle?: { summary?: string; products?: Array<Record<string, unknown>>; comparison_questions?: string[] };
+    risks?: Array<string | { risk?: string; transmission?: string; indicator?: string }>;
+    scenarios?: Array<{ id: string; label: string; industry_path: string; etf_implication: string }>;
+    scorecard?: Array<{ id: string; label: string; stars: number | null; status: string; reason: string }>;
+    evidenceGaps?: EvidenceGapDetail[];
+  };
 }
 
 export interface ReportDetailGateway {
-  getReportDetail(reportId: string): Promise<ReportMemoDetail>;
+  getReportDetail(reportId: string, version?: number): Promise<ReportMemoDetail>;
+  getTimeline(reportId: string): Promise<{ report_id: string; versions: ReportVersionSummary[] }>;
+  compareVersions(reportId: string, left: number, right: number): Promise<ReportVersionComparison>;
   refreshMarketSnapshot(reportId: string): Promise<{ runId: string }>;
 }
 

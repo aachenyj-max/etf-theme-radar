@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS report_claims (claim_id TEXT PRIMARY KEY, report_id T
 CREATE TABLE IF NOT EXISTS report_claim_evidence (claim_id TEXT, event_id TEXT, relation TEXT, PRIMARY KEY(claim_id,event_id));
 CREATE TABLE IF NOT EXISTS sync_runs (sync_run_id TEXT PRIMARY KEY, status TEXT, progress INTEGER, current_source TEXT, created_at TEXT, updated_at TEXT, result_json TEXT, error TEXT, cancel_requested INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS etf_market_snapshots (snapshot_id TEXT PRIMARY KEY, report_id TEXT NOT NULL, collected_at TEXT NOT NULL, market_as_of TEXT, status TEXT, products_json TEXT, errors_json TEXT, payload_json TEXT);
+CREATE TABLE IF NOT EXISTS etf_preview_snapshots (snapshot_id TEXT PRIMARY KEY, collected_at TEXT NOT NULL, market_as_of TEXT, status TEXT, source TEXT, payload_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS theme_candidates (candidate_id TEXT PRIMARY KEY, proposed_name TEXT NOT NULL, description TEXT, status TEXT NOT NULL, signature TEXT NOT NULL, window_start TEXT, window_end TEXT, first_seen_at TEXT, last_seen_at TEXT, metrics_json TEXT, rationale TEXT, merged_theme_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS candidate_evidence (candidate_id TEXT NOT NULL, event_id TEXT NOT NULL, relevance REAL DEFAULT 0, added_at TEXT NOT NULL, PRIMARY KEY(candidate_id,event_id));
+CREATE TABLE IF NOT EXISTS candidate_entities (candidate_id TEXT NOT NULL, entity_key TEXT NOT NULL, label TEXT NOT NULL, entity_type TEXT NOT NULL, mention_count INTEGER DEFAULT 1, PRIMARY KEY(candidate_id,entity_key));
+CREATE TABLE IF NOT EXISTS candidate_aliases (candidate_id TEXT NOT NULL, alias TEXT NOT NULL, confirmed INTEGER DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(candidate_id,alias));
+CREATE TABLE IF NOT EXISTS discovery_runs (discovery_run_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, run_kind TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, window_start TEXT, window_end TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, result_json TEXT, error TEXT, lease_owner TEXT, lease_expires_at TEXT, heartbeat_at TEXT, attempt INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS source_watermarks (source_name TEXT PRIMARY KEY, watermark TEXT, cursor_json TEXT, updated_at TEXT NOT NULL);
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -55,6 +62,14 @@ STEP_EXTRA_COLUMNS = {
     "heartbeat_at": "TEXT DEFAULT ''",
     "retry_count": "INTEGER DEFAULT 0",
 }
+SYNC_EXTRA_COLUMNS = {
+    "days": "INTEGER DEFAULT 7",
+    "idempotency_key": "TEXT DEFAULT ''",
+    "lease_owner": "TEXT DEFAULT ''",
+    "lease_expires_at": "TEXT DEFAULT ''",
+    "heartbeat_at": "TEXT DEFAULT ''",
+    "attempt": "INTEGER DEFAULT 1",
+}
 TOOL_CALL_EXTRA_COLUMNS = {
     "call_uid": "TEXT DEFAULT ''",
     "agent_run_id": "TEXT DEFAULT ''",
@@ -71,6 +86,9 @@ TOOL_CALL_EXTRA_COLUMNS = {
 
 _SCHEMA_LOCK = threading.Lock()
 _INITIALIZED_DATABASES: set[str] = set()
+RESEARCH_EXECUTION_STATUSES = (
+    "planning", "queued", "collecting", "governing", "analyzing", "auditing",
+)
 
 class EvidenceStore:
     def __init__(self, path: str | Path):
@@ -93,8 +111,9 @@ class EvidenceStore:
         run_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(research_runs)")}
         tool_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(tool_calls)")}
         step_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(run_steps)")}
-        needs_upgrade = any(column not in existing for column in EVENT_EXTRA_COLUMNS) or any(column not in run_existing for column in RUN_EXTRA_COLUMNS) or any(column not in tool_existing for column in TOOL_CALL_EXTRA_COLUMNS) or any(column not in step_existing for column in STEP_EXTRA_COLUMNS)
-        backup_path = path.with_suffix(path.suffix + ".pre-schema-v3-agent.bak")
+        sync_existing = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_runs)")}
+        needs_upgrade = any(column not in existing for column in EVENT_EXTRA_COLUMNS) or any(column not in run_existing for column in RUN_EXTRA_COLUMNS) or any(column not in tool_existing for column in TOOL_CALL_EXTRA_COLUMNS) or any(column not in step_existing for column in STEP_EXTRA_COLUMNS) or any(column not in sync_existing for column in SYNC_EXTRA_COLUMNS)
+        backup_path = path.with_suffix(path.suffix + ".pre-schema-v5-theme-discovery.bak")
         if needs_upgrade and existed_before and not backup_path.exists():
             backup = sqlite3.connect(backup_path)
             try: self.conn.backup(backup)
@@ -111,12 +130,21 @@ class EvidenceStore:
         for column, definition in STEP_EXTRA_COLUMNS.items():
             if column not in step_existing:
                 self.conn.execute(f"ALTER TABLE run_steps ADD COLUMN {column} {definition}")
+        for column, definition in SYNC_EXTRA_COLUMNS.items():
+            if column not in sync_existing:
+                self.conn.execute(f"ALTER TABLE sync_runs ADD COLUMN {column} {definition}")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id, attempt, tool_call_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_run ON agent_runs(run_id, attempt)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_step_idempotency ON run_steps(idempotency_key) WHERE idempotency_key <> ''")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_worker ON research_runs(status, lease_expires_at, updated_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_queue ON research_runs(status, queue_position, created_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_market_snapshots_report ON etf_market_snapshots(report_id, collected_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_etf_preview_snapshots ON etf_preview_snapshots(collected_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_status ON theme_candidates(status, updated_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_evidence_event ON candidate_evidence(event_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_runs_status ON discovery_runs(status, lease_expires_at, created_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_runs_worker ON sync_runs(status, lease_expires_at, created_at)")
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_idempotency ON sync_runs(idempotency_key) WHERE idempotency_key <> ''")
         self.conn.commit()
 
     def close(self) -> None:
@@ -168,12 +196,8 @@ class EvidenceStore:
         self, run_id: str, theme_id: str, created_at: str, request: dict,
         *, database_path: str = "",
     ) -> str:
-        """Create one active or one waiting theme run under a single write lock."""
-        active_statuses = (
-            "planning", "awaiting_theme_review", "queued", "collecting", "governing",
-            "analyzing", "auditing", "awaiting_report_review", "returned",
-        )
-        marks = ",".join("?" for _ in active_statuses)
+        """Create a run without allowing it to overtake an existing FIFO waiter."""
+        marks = ",".join("?" for _ in RESEARCH_EXECUTION_STATUSES)
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             active = self.conn.execute(
@@ -181,20 +205,21 @@ class EvidenceStore:
                 WHERE status IN ({marks})
                   AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
                 LIMIT 1""",
-                active_statuses,
+                RESEARCH_EXECUTION_STATUSES,
             ).fetchone()
             waiting = self.conn.execute(
                 """SELECT run_id FROM research_runs
                 WHERE status='waiting'
                   AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
-                LIMIT 1"""
+                ORDER BY queue_position,created_at LIMIT 1"""
             ).fetchone()
-            if active and waiting:
-                self.conn.rollback()
-                return "full"
+            if not active and waiting:
+                self._activate_waiter(str(waiting[0]), created_at)
+                self._normalize_waiting_positions()
+                active = waiting
             status = "waiting" if active else "planning"
-            stage = "waiting" if active else "planning"
-            queue_position = 1 if active else None
+            stage = "planning"
+            queue_position = self._next_waiting_position() if active else None
             self.conn.execute(
                 """INSERT INTO research_runs
                 (run_id,theme_id,status,stage,created_at,updated_at,result_json,error,request_json,
@@ -241,10 +266,12 @@ class EvidenceStore:
             row[0] for row in self.conn.execute(
                 f"""SELECT run_id FROM research_runs WHERE {where}
                 ORDER BY CASE status
-                    WHEN 'awaiting_theme_review' THEN 0 WHEN 'awaiting_report_review' THEN 0
-                    WHEN 'returned' THEN 0 WHEN 'planning' THEN 1 WHEN 'queued' THEN 1
-                    WHEN 'collecting' THEN 1 WHEN 'governing' THEN 1 WHEN 'analyzing' THEN 1
-                    WHEN 'auditing' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
+                    WHEN 'planning' THEN 0 WHEN 'queued' THEN 0 WHEN 'collecting' THEN 0
+                    WHEN 'governing' THEN 0 WHEN 'analyzing' THEN 0 WHEN 'auditing' THEN 0
+                    WHEN 'waiting' THEN 1 WHEN 'awaiting_theme_review' THEN 2
+                    WHEN 'awaiting_report_review' THEN 2 WHEN 'returned' THEN 2
+                    WHEN 'blocked_configuration' THEN 2 ELSE 3 END,
+                    CASE WHEN status='waiting' THEN queue_position END,
                     updated_at DESC LIMIT ? OFFSET ?""",
                 (limit, offset),
             )
@@ -253,17 +280,13 @@ class EvidenceStore:
 
     def promote_waiting_run(self, updated_at: str) -> str | None:
         """Promote the oldest waiting run iff the active slot is free."""
-        active_statuses = (
-            "planning", "awaiting_theme_review", "queued", "collecting", "governing",
-            "analyzing", "auditing", "awaiting_report_review", "returned",
-        )
-        marks = ",".join("?" for _ in active_statuses)
+        marks = ",".join("?" for _ in RESEARCH_EXECUTION_STATUSES)
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             active = self.conn.execute(
                 f"""SELECT 1 FROM research_runs WHERE status IN ({marks})
                 AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%' LIMIT 1""",
-                active_statuses,
+                RESEARCH_EXECUTION_STATUSES,
             ).fetchone()
             if active:
                 self.conn.commit()
@@ -271,16 +294,13 @@ class EvidenceStore:
             waiting = self.conn.execute(
                 """SELECT run_id FROM research_runs WHERE status='waiting'
                 AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
-                ORDER BY created_at LIMIT 1"""
+                ORDER BY queue_position,created_at LIMIT 1"""
             ).fetchone()
             if not waiting:
                 self.conn.commit()
                 return None
-            self.conn.execute(
-                """UPDATE research_runs SET status='planning',stage='planning',
-                queue_position=NULL,updated_at=? WHERE run_id=? AND status='waiting'""",
-                (updated_at, waiting[0]),
-            )
+            self._activate_waiter(str(waiting[0]), updated_at)
+            self._normalize_waiting_positions()
             self.conn.commit()
             return str(waiting[0])
         except Exception:
@@ -307,24 +327,98 @@ class EvidenceStore:
                 (*updates.values(), run_id, *sorted(expected_statuses)),
             )
             promoted = None
-            if cursor.rowcount == 1 and promote:
-                waiting = self.conn.execute(
-                    """SELECT run_id FROM research_runs WHERE status='waiting'
-                    AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
-                    ORDER BY created_at LIMIT 1"""
-                ).fetchone()
-                if waiting:
-                    promoted = str(waiting[0])
-                    self.conn.execute(
-                        """UPDATE research_runs SET status='planning',stage='planning',
-                        queue_position=NULL,updated_at=? WHERE run_id=? AND status='waiting'""",
-                        (str(values.get("updated_at") or utcnow()), promoted),
-                    )
+            if cursor.rowcount == 1:
+                if promote:
+                    promoted = self._promote_waiter_if_idle(str(values.get("updated_at") or utcnow()))
+                self._normalize_waiting_positions()
             self.conn.commit()
             return cursor.rowcount == 1, promoted
         except Exception:
             self.conn.rollback()
             raise
+
+    def requeue_research_run(
+        self, run_id: str, expected_statuses: set[str], *, stage_after_promotion: str,
+        **values: object,
+    ) -> tuple[bool, str | None]:
+        """Append an existing run to FIFO, then immediately promote the head if idle."""
+        if not expected_statuses:
+            return False, None
+        allowed = {"updated_at", "result_json", "error", "progress", "review_gate", "attempt", "lease_owner", "lease_expires_at", "heartbeat_at"}
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if "result" in values:
+            updates["result_json"] = json.dumps(values["result"], ensure_ascii=False)
+        updates.update({
+            "status": "waiting", "stage": stage_after_promotion,
+            "queue_position": 0,
+        })
+        marks = ",".join("?" for _ in expected_statuses)
+        assignments = ",".join(f"{key}=?" for key in updates)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Recompute after the write lock is held so concurrent reviews keep FIFO order.
+            updates["queue_position"] = self._next_waiting_position()
+            cursor = self.conn.execute(
+                f"UPDATE research_runs SET {assignments} WHERE run_id=? AND status IN ({marks})",
+                (*updates.values(), run_id, *sorted(expected_statuses)),
+            )
+            promoted = self._promote_waiter_if_idle(str(values.get("updated_at") or utcnow())) if cursor.rowcount == 1 else None
+            self._normalize_waiting_positions()
+            self.conn.commit()
+            return cursor.rowcount == 1, promoted
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def _next_waiting_position(self) -> int:
+        row = self.conn.execute(
+            """SELECT COALESCE(MAX(queue_position),0) FROM research_runs
+            WHERE status='waiting' AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'"""
+        ).fetchone()
+        return int(row[0] or 0) + 1
+
+    def _promote_waiter_if_idle(self, updated_at: str) -> str | None:
+        marks = ",".join("?" for _ in RESEARCH_EXECUTION_STATUSES)
+        active = self.conn.execute(
+            f"""SELECT 1 FROM research_runs WHERE status IN ({marks})
+            AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%' LIMIT 1""",
+            RESEARCH_EXECUTION_STATUSES,
+        ).fetchone()
+        if active:
+            return None
+        waiting = self.conn.execute(
+            """SELECT run_id FROM research_runs WHERE status='waiting'
+            AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
+            ORDER BY queue_position,created_at LIMIT 1"""
+        ).fetchone()
+        if not waiting:
+            return None
+        self._activate_waiter(str(waiting[0]), updated_at)
+        return str(waiting[0])
+
+    def _activate_waiter(self, run_id: str, updated_at: str) -> None:
+        row = self.conn.execute(
+            "SELECT stage FROM research_runs WHERE run_id=? AND status='waiting'",
+            (run_id,),
+        ).fetchone()
+        resume_stage = str(row[0]) if row and str(row[0]) in RESEARCH_EXECUTION_STATUSES else "planning"
+        self.conn.execute(
+            """UPDATE research_runs SET status=?,stage=?,queue_position=NULL,updated_at=?
+            WHERE run_id=? AND status='waiting'""",
+            (resume_stage, resume_stage, updated_at, run_id),
+        )
+
+    def _normalize_waiting_positions(self) -> None:
+        rows = self.conn.execute(
+            """SELECT run_id FROM research_runs WHERE status='waiting'
+            AND theme_id NOT LIKE 'event:%' AND theme_id NOT LIKE 'report-refresh:%'
+            ORDER BY queue_position,created_at"""
+        ).fetchall()
+        for position, row in enumerate(rows, start=1):
+            self.conn.execute(
+                "UPDATE research_runs SET queue_position=? WHERE run_id=?",
+                (position, row[0]),
+            )
 
     def register_run(self, run_id: str, database_path: str, created_at: str) -> None:
         self.conn.execute(
@@ -382,6 +476,226 @@ class EvidenceStore:
             item["metrics"] = json.loads(item["metrics"] or "{}")
         return result
 
+    def save_theme_candidate(self, item: dict) -> None:
+        """Upsert a governed candidate while preserving its review terminal state."""
+        existing = self.conn.execute(
+            "SELECT status,created_at FROM theme_candidates WHERE candidate_id=?",
+            (item["candidate_id"],),
+        ).fetchone()
+        if existing and existing[0] in {"confirmed", "merged", "rejected"}:
+            return
+        status = str(item["status"])
+        created_at = str(existing[1]) if existing else str(item["created_at"])
+        self.conn.execute(
+            """INSERT INTO theme_candidates
+            (candidate_id,proposed_name,description,status,signature,window_start,window_end,
+             first_seen_at,last_seen_at,metrics_json,rationale,merged_theme_id,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+              proposed_name=excluded.proposed_name,description=excluded.description,
+              status=excluded.status,window_start=excluded.window_start,window_end=excluded.window_end,
+              first_seen_at=excluded.first_seen_at,last_seen_at=excluded.last_seen_at,
+              metrics_json=excluded.metrics_json,rationale=excluded.rationale,updated_at=excluded.updated_at""",
+            (
+                item["candidate_id"], item["proposed_name"], item.get("description", ""), status,
+                item["signature"], item.get("window_start", ""), item.get("window_end", ""),
+                item.get("first_seen_at", ""), item.get("last_seen_at", ""),
+                json.dumps(item.get("metrics", {}), ensure_ascii=False), item.get("rationale", ""),
+                item.get("merged_theme_id", ""), created_at, item["updated_at"],
+            ),
+        )
+        candidate_id = str(item["candidate_id"])
+        self.conn.execute("DELETE FROM candidate_evidence WHERE candidate_id=?", (candidate_id,))
+        self.conn.execute("DELETE FROM candidate_entities WHERE candidate_id=?", (candidate_id,))
+        self.conn.execute("DELETE FROM candidate_aliases WHERE candidate_id=?", (candidate_id,))
+        for evidence in item.get("evidence", []):
+            self.conn.execute(
+                "INSERT OR IGNORE INTO candidate_evidence(candidate_id,event_id,relevance,added_at) VALUES (?,?,?,?)",
+                (candidate_id, str(evidence["event_id"]), float(evidence.get("relevance", 0)), item["updated_at"]),
+            )
+        for entity in item.get("entities", []):
+            self.conn.execute(
+                """INSERT INTO candidate_entities(candidate_id,entity_key,label,entity_type,mention_count)
+                VALUES (?,?,?,?,?) ON CONFLICT(candidate_id,entity_key) DO UPDATE SET
+                label=excluded.label,entity_type=excluded.entity_type,mention_count=excluded.mention_count""",
+                (
+                    candidate_id, str(entity["entity_key"]), str(entity["label"]),
+                    str(entity.get("entity_type", "company")), int(entity.get("mention_count", 1)),
+                ),
+            )
+        for alias in item.get("aliases", []):
+            if str(alias).strip():
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO candidate_aliases(candidate_id,alias,confirmed,created_at) VALUES (?,?,0,?)",
+                    (candidate_id, str(alias).strip(), item["updated_at"]),
+                )
+        self.commit()
+
+    def theme_candidate(self, candidate_id: str) -> dict | None:
+        keys = (
+            "candidate_id", "proposed_name", "description", "status", "signature",
+            "window_start", "window_end", "first_seen_at", "last_seen_at", "metrics",
+            "rationale", "merged_theme_id", "created_at", "updated_at",
+        )
+        row = self.conn.execute(
+            """SELECT candidate_id,proposed_name,description,status,signature,window_start,window_end,
+            first_seen_at,last_seen_at,metrics_json,rationale,merged_theme_id,created_at,updated_at
+            FROM theme_candidates WHERE candidate_id=?""",
+            (candidate_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(zip(keys, row))
+        item["metrics"] = json.loads(item["metrics"] or "{}")
+        item["aliases"] = [row[0] for row in self.conn.execute(
+            "SELECT alias FROM candidate_aliases WHERE candidate_id=? ORDER BY alias", (candidate_id,)
+        )]
+        entity_keys = ("entity_key", "label", "entity_type", "mention_count")
+        item["entities"] = [dict(zip(entity_keys, row)) for row in self.conn.execute(
+            "SELECT entity_key,label,entity_type,mention_count FROM candidate_entities WHERE candidate_id=? ORDER BY mention_count DESC,label",
+            (candidate_id,),
+        )]
+        event_ids = [row[0] for row in self.conn.execute(
+            "SELECT event_id FROM candidate_evidence WHERE candidate_id=? ORDER BY relevance DESC,event_id", (candidate_id,)
+        )]
+        item["evidence"] = [event for event_id in event_ids if (event := self.event(event_id))]
+        return item
+
+    def theme_candidates(self, status: str | None = None, limit: int = 100) -> list[dict]:
+        query = "SELECT candidate_id FROM theme_candidates"
+        params: tuple = ()
+        if status:
+            query += " WHERE status=?"
+            params = (status,)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params = (*params, limit)
+        return [item for row in self.conn.execute(query, params) if (item := self.theme_candidate(str(row[0])))]
+
+    def event(self, event_id: str) -> dict | None:
+        columns = [item[0] for item in self.conn.execute("SELECT * FROM normalized_events LIMIT 0").description]
+        row = self.conn.execute("SELECT * FROM normalized_events WHERE event_id=?", (event_id,)).fetchone()
+        return dict(zip(columns, row)) if row else None
+
+    def review_theme_candidate(
+        self, candidate_id: str, decision: str, updated_at: str,
+        *, target_theme_id: str = "", note: str = "",
+    ) -> dict | None:
+        """Atomically confirm, merge or reject a candidate and its evidence assignments."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                "SELECT proposed_name,description,status FROM theme_candidates WHERE candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+            if not row or str(row[2]) in {"confirmed", "merged", "rejected"}:
+                self.conn.rollback()
+                return None
+            aliases = [str(item[0]) for item in self.conn.execute(
+                "SELECT alias FROM candidate_aliases WHERE candidate_id=?", (candidate_id,)
+            )]
+            if decision == "confirm":
+                theme_id = target_theme_id or candidate_id.removeprefix("candidate:")
+                exists = self.conn.execute("SELECT 1 FROM themes WHERE theme_id=?", (theme_id,)).fetchone()
+                if exists:
+                    raise ValueError("theme_id 已存在，请改用 merge")
+                self.conn.execute(
+                    "INSERT INTO themes(theme_id,name,description,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                    (theme_id, str(row[0]), str(row[1] or ""), "confirmed", updated_at, updated_at),
+                )
+                aliases.append(str(row[0]))
+                final_status = "confirmed"
+            elif decision == "merge":
+                theme_id = target_theme_id
+                if not theme_id or not self.conn.execute(
+                    "SELECT 1 FROM themes WHERE theme_id=? AND status='confirmed'", (theme_id,)
+                ).fetchone():
+                    raise ValueError("merge 需要有效的已确认 target_theme_id")
+                final_status = "merged"
+            elif decision == "reject":
+                theme_id = ""
+                final_status = "rejected"
+            else:
+                raise ValueError("不支持的候选复核决定")
+            if theme_id:
+                for alias in dict.fromkeys(aliases):
+                    if alias.strip():
+                        self.conn.execute(
+                            "INSERT OR REPLACE INTO theme_aliases(theme_id,alias,alias_type,confirmed,created_at) VALUES (?,?,?,?,?)",
+                            (theme_id, alias.strip(), "discovery", 1, updated_at),
+                        )
+                event_ids = [item[0] for item in self.conn.execute(
+                    "SELECT event_id FROM candidate_evidence WHERE candidate_id=?", (candidate_id,)
+                )]
+                for event_id in event_ids:
+                    self.conn.execute(
+                        """UPDATE normalized_events SET relevance_status='relevant',theme_assignment_status='assigned',
+                        primary_theme=?,themes=?,classification_reasons=?,classification_confidence=MAX(classification_confidence,0.75),theme_relevance=MAX(theme_relevance,0.75)
+                        WHERE event_id=?""",
+                        (theme_id, json.dumps([theme_id], ensure_ascii=False), json.dumps([f"人工确认候选主题：{candidate_id}"], ensure_ascii=False), event_id),
+                    )
+            self.conn.execute(
+                "UPDATE theme_candidates SET status=?,merged_theme_id=?,rationale=?,updated_at=? WHERE candidate_id=?",
+                (final_status, theme_id if decision == "merge" else "", note, updated_at, candidate_id),
+            )
+            self.conn.commit()
+            return {"candidate_id": candidate_id, "status": final_status, "theme_id": theme_id}
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def create_discovery_run(self, item: dict) -> bool:
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO discovery_runs
+            (discovery_run_id,idempotency_key,run_kind,status,stage,window_start,window_end,created_at,updated_at,result_json,error,lease_owner,lease_expires_at,heartbeat_at,attempt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                item["discovery_run_id"], item["idempotency_key"], item.get("run_kind", "daily"),
+                item.get("status", "queued"), item.get("stage", "queued"), item.get("window_start", ""),
+                item.get("window_end", ""), item["created_at"], item["created_at"], "{}", "", "", "", "", 1,
+            ),
+        )
+        self.commit()
+        return cursor.rowcount == 1
+
+    def update_discovery_run(self, discovery_run_id: str, *, status: str, stage: str, updated_at: str, result: dict | None = None, error: str = "") -> None:
+        self.conn.execute(
+            "UPDATE discovery_runs SET status=?,stage=?,updated_at=?,result_json=?,error=? WHERE discovery_run_id=?",
+            (status, stage, updated_at, json.dumps(result or {}, ensure_ascii=False), error, discovery_run_id),
+        )
+        self.commit()
+
+    def discovery_runs(self, limit: int = 20) -> list[dict]:
+        keys = ("discovery_run_id", "idempotency_key", "run_kind", "status", "stage", "window_start", "window_end", "created_at", "updated_at", "result", "error", "lease_owner", "lease_expires_at", "heartbeat_at", "attempt")
+        rows = self.conn.execute(
+            """SELECT discovery_run_id,idempotency_key,run_kind,status,stage,window_start,window_end,
+            created_at,updated_at,result_json,error,lease_owner,lease_expires_at,heartbeat_at,attempt
+            FROM discovery_runs ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        )
+        result = [dict(zip(keys, row)) for row in rows]
+        for item in result:
+            item["result"] = json.loads(item["result"] or "{}")
+        return result
+
+    def claim_next_discovery_run(self, owner: str, now: str, lease_expires_at: str) -> dict | None:
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                """SELECT discovery_run_id FROM discovery_runs
+                WHERE status='queued' OR (status='running' AND lease_expires_at<>'' AND lease_expires_at<?)
+                ORDER BY created_at LIMIT 1""", (now,),
+            ).fetchone()
+            if not row:
+                self.conn.rollback(); return None
+            self.conn.execute(
+                """UPDATE discovery_runs SET status='running',stage='clustering',lease_owner=?,lease_expires_at=?,heartbeat_at=?,updated_at=?,attempt=CASE WHEN status='running' THEN attempt+1 ELSE attempt END
+                WHERE discovery_run_id=?""", (owner,lease_expires_at,now,now,row[0]),
+            )
+            self.conn.commit()
+            return next((item for item in self.discovery_runs(100) if item["discovery_run_id"] == row[0]), None)
+        except Exception:
+            self.conn.rollback(); raise
+
     def save_entity(self, item: dict) -> None:
         self.conn.execute(
             """INSERT INTO entities(entity_id,entity_type,canonical_name,ticker,exchange,review_status,created_at,updated_at)
@@ -398,6 +712,49 @@ class EvidenceStore:
             (item["link_id"], item["entity_id"], item["event_id"], item["theme_id"], item.get("relation_type", "mentioned"), item.get("confidence", 0.5), item.get("review_status", "needs_review"), item["created_at"]),
         )
         self.commit()
+
+    def save_entities_and_links(self, entities: list[dict], links: list[dict]) -> None:
+        """Upsert a complete entity-resolution batch in one short transaction."""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.executemany(
+                """INSERT INTO entities(entity_id,entity_type,canonical_name,ticker,exchange,review_status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(entity_id) DO UPDATE SET
+                entity_type=excluded.entity_type,canonical_name=excluded.canonical_name,
+                ticker=excluded.ticker,exchange=excluded.exchange,updated_at=excluded.updated_at""",
+                [
+                    (
+                        item["entity_id"], item["entity_type"], item["canonical_name"],
+                        item.get("ticker", ""), item.get("exchange", "unknown"),
+                        item.get("review_status", "needs_review"), item["created_at"], item["updated_at"],
+                    )
+                    for item in entities
+                ],
+            )
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO entity_aliases(entity_id,alias) VALUES (?,?)",
+                [
+                    (item["entity_id"], str(alias))
+                    for item in entities for alias in item.get("aliases", []) if str(alias).strip()
+                ],
+            )
+            self.conn.executemany(
+                """INSERT OR REPLACE INTO entity_links
+                (link_id,entity_id,event_id,theme_id,relation_type,confidence,review_status,created_at)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                [
+                    (
+                        item["link_id"], item["entity_id"], item["event_id"], item["theme_id"],
+                        item.get("relation_type", "mentioned"), item.get("confidence", 0.5),
+                        item.get("review_status", "needs_review"), item["created_at"],
+                    )
+                    for item in links
+                ],
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def entities(self, review_status: str | None = None) -> list[dict]:
         query = "SELECT entity_id,entity_type,canonical_name,ticker,exchange,review_status,created_at,updated_at FROM entities"
@@ -460,9 +817,21 @@ class EvidenceStore:
                         "INSERT OR IGNORE INTO report_claim_evidence(claim_id,event_id,relation) VALUES (?,?,?)",
                         (claim_id, str(event_id), relation),
                     )
+            asset = payload.get("asset") or {}
             promoted = self.conn.execute(
-                "UPDATE report_assets SET version=?,updated_at=? WHERE report_id=? AND deleted_at IS NULL",
-                (version, created_at, report_id),
+                """UPDATE report_assets SET
+                run_id=?,title=?,kind=?,theme_id=?,folder_id=?,status=?,tags=?,summary=?,
+                updated_at=?,version=?,source_count=?,evidence_count=?,audit_passed=?
+                WHERE report_id=? AND deleted_at IS NULL""",
+                (
+                    asset.get("run_id", ""), asset.get("title", ""),
+                    asset.get("kind", "theme_report"), asset.get("theme_id", "unknown"),
+                    asset.get("folder_id", "ai"), asset.get("status", "completed"),
+                    json.dumps(asset.get("tags", []), ensure_ascii=False), asset.get("summary", ""),
+                    created_at, version, int(asset.get("source_count", 0)),
+                    int(asset.get("evidence_count", 0)), int(bool(asset.get("audit_passed", False))),
+                    report_id,
+                ),
             )
             if promoted.rowcount != 1:
                 raise ValueError("报告资产不存在或已删除")
@@ -505,17 +874,23 @@ class EvidenceStore:
             item["evidence_ids"] = [row[0] for row in self.conn.execute("SELECT event_id FROM report_claim_evidence WHERE claim_id=? ORDER BY event_id", (item["claim_id"],))]
         return result
 
-    def create_sync_run(self, sync_run_id: str, created_at: str) -> None:
-        self.conn.execute("INSERT INTO sync_runs(sync_run_id,status,progress,current_source,created_at,updated_at,result_json,error,cancel_requested) VALUES (?,?,?,?,?,?,?,?,0)", (sync_run_id,"queued",0,"",created_at,created_at,"{}",""))
+    def create_sync_run(self, sync_run_id: str, created_at: str, *, days: int = 7, idempotency_key: str = "") -> bool:
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO sync_runs
+            (sync_run_id,status,progress,current_source,created_at,updated_at,result_json,error,cancel_requested,days,idempotency_key,lease_owner,lease_expires_at,heartbeat_at,attempt)
+            VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?,1)""",
+            (sync_run_id,"queued",0,"",created_at,created_at,"{}","",days,idempotency_key,"","",""),
+        )
         self.commit()
+        return cursor.rowcount == 1
 
     def update_sync_run(self, sync_run_id: str, *, status: str, progress: int, updated_at: str, current_source: str = "", result: dict | None = None, error: str = "") -> None:
         self.conn.execute("UPDATE sync_runs SET status=?,progress=?,current_source=?,updated_at=?,result_json=?,error=? WHERE sync_run_id=?", (status,progress,current_source,updated_at,json.dumps(result or {},ensure_ascii=False),error,sync_run_id))
         self.commit()
 
     def sync_run(self, sync_run_id: str) -> dict | None:
-        keys=("sync_run_id","status","progress","current_source","created_at","updated_at","result","error","cancel_requested")
-        row=self.conn.execute("SELECT sync_run_id,status,progress,current_source,created_at,updated_at,result_json,error,cancel_requested FROM sync_runs WHERE sync_run_id=?",(sync_run_id,)).fetchone()
+        keys=("sync_run_id","status","progress","current_source","created_at","updated_at","result","error","cancel_requested","days","idempotency_key","lease_owner","lease_expires_at","heartbeat_at","attempt")
+        row=self.conn.execute("SELECT sync_run_id,status,progress,current_source,created_at,updated_at,result_json,error,cancel_requested,days,idempotency_key,lease_owner,lease_expires_at,heartbeat_at,attempt FROM sync_runs WHERE sync_run_id=?",(sync_run_id,)).fetchone()
         if not row: return None
         item=dict(zip(keys,row)); item["result"]=json.loads(item["result"] or "{}"); item["cancel_requested"]=bool(item["cancel_requested"]); return item
 
@@ -523,9 +898,47 @@ class EvidenceStore:
         ids=[row[0] for row in self.conn.execute("SELECT sync_run_id FROM sync_runs ORDER BY created_at DESC LIMIT ?",(limit,))]
         return [item for sync_run_id in ids if (item:=self.sync_run(sync_run_id))]
 
+    def active_etf_preview_sync_run(self) -> dict | None:
+        row = self.conn.execute(
+            """SELECT sync_run_id FROM sync_runs
+            WHERE idempotency_key LIKE 'etf-preview:%' AND status IN ('queued','running')
+            ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+        return self.sync_run(str(row[0])) if row else None
+
     def request_sync_cancel(self, sync_run_id: str) -> bool:
         cursor=self.conn.execute("UPDATE sync_runs SET cancel_requested=1,updated_at=? WHERE sync_run_id=? AND status IN ('queued','running')",(utcnow(),sync_run_id))
         self.commit(); return cursor.rowcount==1
+
+    def claim_next_sync_run(self, owner: str, now: str, lease_expires_at: str) -> dict | None:
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                """SELECT sync_run_id FROM sync_runs
+                WHERE cancel_requested=0 AND (status='queued' OR (status='running' AND lease_expires_at<>'' AND lease_expires_at<?))
+                ORDER BY CASE WHEN idempotency_key LIKE 'etf-preview:%' THEN 0 ELSE 1 END,
+                         created_at LIMIT 1""", (now,),
+            ).fetchone()
+            if not row:
+                self.conn.rollback()
+                return None
+            self.conn.execute(
+                """UPDATE sync_runs SET status='running',lease_owner=?,lease_expires_at=?,heartbeat_at=?,updated_at=?,attempt=CASE WHEN status='running' THEN attempt+1 ELSE attempt END
+                WHERE sync_run_id=?""", (owner,lease_expires_at,now,now,row[0]),
+            )
+            self.conn.commit()
+            return self.sync_run(str(row[0]))
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def heartbeat_sync_run(self, sync_run_id: str, owner: str, now: str, lease_expires_at: str) -> bool:
+        cursor = self.conn.execute(
+            "UPDATE sync_runs SET heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE sync_run_id=? AND status='running' AND lease_owner=?",
+            (now,lease_expires_at,now,sync_run_id,owner),
+        )
+        self.commit()
+        return cursor.rowcount == 1
 
     def save_step(self, run_id: str, attempt: int, step_name: str, status: str, *, started_at: str | None = None, finished_at: str | None = None, error: str = "", details: dict | None = None, idempotency_key: str | None = None, lease_owner: str = "", lease_expires_at: str = "", heartbeat_at: str = "", retry_count: int = 0) -> None:
         existing = self.conn.execute(
@@ -549,7 +962,9 @@ class EvidenceStore:
                 """SELECT run_id FROM research_runs
                 WHERE status IN ('planning','queued','collecting','governing','analyzing','auditing')
                   AND (lease_expires_at='' OR lease_expires_at IS NULL OR lease_expires_at<=?)
-                ORDER BY created_at LIMIT 1""",
+                ORDER BY CASE WHEN theme_id LIKE 'report-refresh:%' THEN 0 ELSE 1 END,
+                         created_at
+                LIMIT 1""",
                 (now,),
             ).fetchone()
             if not row:
@@ -644,6 +1059,18 @@ class EvidenceStore:
     def agent_runs(self, run_id: str) -> list[dict]:
         columns = [item[0] for item in self.conn.execute("SELECT * FROM agent_runs").description]
         return [dict(zip(columns, row)) for row in self.conn.execute("SELECT * FROM agent_runs WHERE run_id=? ORDER BY started_at", (run_id,))]
+
+    def close_interrupted_agent_runs(self, run_id: str, finished_at: str) -> int:
+        """Close stale audit rows before a leased run starts a new agent session."""
+        cursor = self.conn.execute(
+            """UPDATE agent_runs
+            SET status='interrupted',stop_reason='worker_recovered',finished_at=?,
+                error=CASE WHEN error='' THEN 'Worker restarted before the agent session closed.' ELSE error END
+            WHERE run_id=? AND status='running'""",
+            (finished_at, run_id),
+        )
+        self.commit()
+        return int(cursor.rowcount)
 
     def start_tool_call(self, *, run_id: str, attempt: int, call_uid: str, agent_run_id: str, round_number: int, tool_name: str, started_at: str, arguments: dict) -> int:
         existing = self.conn.execute("SELECT tool_call_id FROM tool_calls WHERE run_id=? AND call_uid=?", (run_id, call_uid)).fetchone()
@@ -761,6 +1188,26 @@ class EvidenceStore:
             item[key] = json.loads(item[key] or json.dumps(fallback))
         return item
 
+    def save_etf_preview_snapshot(self, item: dict) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO etf_preview_snapshots
+            (snapshot_id,collected_at,market_as_of,status,source,payload_json)
+            VALUES (?,?,?,?,?,?)""",
+            (
+                item["snapshot_id"], item["collected_at"], item.get("market_as_of", ""),
+                item.get("status", "unknown"), item.get("source", "天天基金网"),
+                json.dumps(item, ensure_ascii=False),
+            ),
+        )
+        self.commit()
+
+    def latest_etf_preview_snapshot(self) -> dict | None:
+        row = self.conn.execute(
+            """SELECT payload_json FROM etf_preview_snapshots
+            ORDER BY collected_at DESC, rowid DESC LIMIT 1"""
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def update_report_asset(self, report_id: str, *, title: str | None = None, status: str | None = None, updated_at: str) -> dict | None:
         current = self.report_asset(report_id)
         if not current:
@@ -768,10 +1215,9 @@ class EvidenceStore:
         next_title = title.strip() if title is not None else current["title"]
         next_status = status or current["status"]
         archived_at = updated_at if next_status == "archived" else current["archived_at"]
-        version = current["version"] + (1 if title is not None and next_title != current["title"] else 0)
         self.conn.execute(
-            "UPDATE report_assets SET title=?,status=?,updated_at=?,archived_at=?,version=? WHERE report_id=?",
-            (next_title, next_status, updated_at, archived_at, version, report_id),
+            "UPDATE report_assets SET title=?,status=?,updated_at=?,archived_at=? WHERE report_id=?",
+            (next_title, next_status, updated_at, archived_at, report_id),
         )
         self.commit()
         return self.report_asset(report_id)

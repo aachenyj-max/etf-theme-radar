@@ -1,0 +1,64 @@
+"""Create a consistent SQLite backup without stopping the API service."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def create_backup(source: Path, destination_dir: Path) -> Path:
+    source = source.resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"SQLite source does not exist: {source}")
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    destination = destination_dir / f"radar-{stamp}.db"
+    temporary = destination_dir / f".{destination.name}.{uuid4().hex}.tmp"
+
+    source_connection = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
+    destination_connection = sqlite3.connect(temporary)
+    try:
+        source_connection.backup(destination_connection)
+        result = destination_connection.execute("PRAGMA integrity_check").fetchone()
+        if result != ("ok",):
+            raise RuntimeError(f"backup integrity check failed: {result}")
+    finally:
+        destination_connection.close()
+        source_connection.close()
+
+    os.replace(temporary, destination)
+    metadata = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_name": source.name,
+        "database": destination.name,
+        "sha256": _sha256(destination),
+        "bytes": destination.stat().st_size,
+    }
+    destination.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return destination
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--destination-dir", required=True, type=Path)
+    args = parser.parse_args()
+    print(create_backup(args.source, args.destination_dir))
+
+
+if __name__ == "__main__":
+    main()

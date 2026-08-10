@@ -97,10 +97,10 @@ def test_no_evidence_guard_is_audited_and_allows_counter_call(tmp_path: Path) ->
     store.close()
 
 
-def test_etf_request_budget_records_finish_research_guardrail(tmp_path: Path, monkeypatch) -> None:
+def test_unified_request_budget_records_finish_research_guardrail(tmp_path: Path, monkeypatch) -> None:
     class BudgetExhaustingAgent:
         def run_sync(self, *_args, **_kwargs):
-            raise RuntimeError("The next request would exceed the request_limit of 4")
+            raise RuntimeError("The next request would exceed the request_limit of 6")
 
     config = ModelConfig("deepseek", "https://api.deepseek.com", "deepseek-v4-flash", "deepseek-v4-pro", "test", 500)
     monkeypatch.setattr(runtime_module, "model_config", lambda: config)
@@ -108,7 +108,7 @@ def test_etf_request_budget_records_finish_research_guardrail(tmp_path: Path, mo
     store = EvidenceStore(tmp_path / "budget.db")
     store.create_research_run(
         "budget-run", "robotics", "2026-07-31T00:00:00Z",
-        {"topic": "robotics", "sources": [], "time_range": "90d", "output_type": "etf_opportunity_analysis"},
+        {"topic": "robotics", "sources": [], "time_range": "multi_horizon", "output_type": "theme_report"},
         status="collecting", stage="collecting",
     )
     run = store.research_run("budget-run")
@@ -118,10 +118,10 @@ def test_etf_request_budget_records_finish_research_guardrail(tmp_path: Path, mo
 
     assert result["status"] == "succeeded"
     assert result["stop_reason"] == "budget_exhausted"
-    assert result["usage"] == {"requests": 4, "tool_calls": 1}
+    assert result["usage"] == {"requests": 6, "tool_calls": 1}
     assert [item["tool_name"] for item in store.tool_calls("budget-run")] == ["finish_research"]
     audit = store.agent_runs("budget-run")[0]
-    assert audit["status"] == "succeeded" and audit["model_requests"] == 4
+    assert audit["status"] == "succeeded" and audit["model_requests"] == 6
     store.close()
 
 

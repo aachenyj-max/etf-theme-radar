@@ -13,6 +13,7 @@ def test_launcher_uses_only_canonical_ports_and_build_directory() -> None:
     assert '$env:RADAR_NEXT_DIST_DIR = ".next"' in launcher
     assert "Find-AvailablePort" not in launcher
     assert 'distDir: process.env.RADAR_NEXT_DIST_DIR || ".next"' in next_config
+    assert 'allowedDevOrigins: ["127.0.0.1"]' in next_config
     assert 'process.env.RADAR_BACKEND_URL || "http://127.0.0.1:8001"' in next_config
 
 
@@ -26,12 +27,13 @@ def test_launcher_restores_next_build_directory_environment() -> None:
 
 def test_launcher_reuses_only_matching_contract_with_worker_heartbeat() -> None:
     launcher = (PROJECT_ROOT / "tools" / "start_local.ps1").read_text(encoding="utf-8")
-    assert '$contractVersion = "2026-07-31.v4"' in launcher
+    assert '$contractVersion = "2026-08-05.v9"' in launcher
     assert "api/capabilities" in launcher
     assert 'service.id -eq $serviceId' in launcher
     assert 'service.contract_version -eq $contractVersion' in launcher
     assert 'worker.heartbeat_at' in launcher
     assert 'launcher.lock' in launcher
+    assert '$attempt -lt 180' in launcher
 
 
 def test_batch_launcher_stays_visible_and_reuse_opens_frontend() -> None:

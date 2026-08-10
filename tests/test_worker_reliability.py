@@ -37,12 +37,30 @@ def test_run_lease_is_atomic_and_expired_lease_can_be_reclaimed(tmp_path: Path) 
     assert reclaimed and reclaimed["lease_owner"] == "worker-c"
 
 
-@pytest.mark.parametrize("output_type", ["quick_scan", "theme_report", "etf_opportunity_analysis"])
-def test_worker_resumes_one_persisted_phase_at_a_time(tmp_path: Path, monkeypatch, output_type: str) -> None:
+def test_market_refresh_is_claimed_before_older_research_phase(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "priority.db")
+    store.create_research_run(
+        "older-research", "robotics", "2026-07-29T00:00:00+00:00",
+        {"topic": "机器人"}, status="governing", stage="governing",
+    )
+    store.create_research_run(
+        "market-refresh", "report-refresh:report:one", "2026-07-29T00:01:00+00:00",
+        {"report_id": "report:one"}, status="queued", stage="market_refresh",
+    )
+
+    claimed = store.claim_next_run(
+        "worker", "2026-07-29T00:02:00+00:00", "2026-07-29T00:03:00+00:00",
+    )
+
+    assert claimed and claimed["run_id"] == "market-refresh"
+    store.close()
+
+
+def test_worker_resumes_one_persisted_phase_at_a_time(tmp_path: Path, monkeypatch) -> None:
     db = tmp_path / "phases.db"
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     store = EvidenceStore(db)
-    store.create_research_run("run-phases", "robotics", "2026-07-29T00:00:00+00:00", {"topic": "机器人", "sources": [], "output_type": output_type}, status="queued", stage="collecting")
+    store.create_research_run("run-phases", "robotics", "2026-07-29T00:00:00+00:00", {"topic": "机器人", "sources": [], "output_type": "theme_report"}, status="queued", stage="collecting")
     store.update_research_run("run-phases", status="queued", stage="collecting", updated_at="2026-07-29T00:00:01+00:00", result={"theme_definition": {"theme_id": "robotics", "name": "机器人", "aliases": ["robotics"], "include_terms": ["robotics"]}})
     store.close()
     worker = DurableWorker(db)
@@ -57,8 +75,7 @@ def test_worker_resumes_one_persisted_phase_at_a_time(tmp_path: Path, monkeypatc
     try: final = final_store.research_run("run-phases")
     finally: final_store.close()
     assert final and final["status"] == "awaiting_report_review"
-    if output_type == "etf_opportunity_analysis":
-        assert "etf_opportunity" in final["result"]
+    assert final["result"]["output_type"] == "theme_report"
 
 
 def test_worker_survives_a_transient_sqlite_lock(tmp_path: Path, monkeypatch) -> None:
@@ -107,6 +124,21 @@ def test_heartbeat_retries_a_transient_sqlite_lock(tmp_path: Path, monkeypatch) 
     assert attempts >= 2
 
 
+def test_stale_agent_audit_is_closed_before_recovery(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "agent-recovery.db")
+    store.create_agent_run({
+        "agent_run_id": "stale-agent", "run_id": "run-1", "attempt": 1,
+        "provider": "test", "model": "test", "prompt_version": "v1",
+        "prompt_hash": "hash", "status": "running", "started_at": "2026-08-05T00:00:00+00:00",
+    })
+    assert store.close_interrupted_agent_runs("run-1", "2026-08-05T00:01:00+00:00") == 1
+    recovered = store.agent_runs("run-1")[0]
+    assert recovered["status"] == "interrupted"
+    assert recovered["stop_reason"] == "worker_recovered"
+    assert recovered["finished_at"] == "2026-08-05T00:01:00+00:00"
+    store.close()
+
+
 def test_custom_database_path_is_resolved_from_registry(tmp_path: Path, monkeypatch) -> None:
     control = tmp_path / "control.db"
     custom = tmp_path / "custom.db"
@@ -124,15 +156,11 @@ def test_custom_database_path_is_resolved_from_registry(tmp_path: Path, monkeypa
     stop_all_workers()
 
 
-def test_event_research_uses_the_same_durable_worker(tmp_path: Path, monkeypatch) -> None:
+def test_event_research_creation_is_retired_but_legacy_reads_remain(tmp_path: Path, monkeypatch) -> None:
     db=tmp_path/"events-worker.db"; monkeypatch.setenv("DATABASE_PATH",str(db)); monkeypatch.setenv("DEEPSEEK_API_KEY","")
     store=EvidenceStore(db)
     store.save_event(NormalizedEvent("event-1","fixture","https://example.com/event","social","Generic event","Unverified event lead",None,"2026-07-29T00:00:00+00:00",("robotics",),publisher="example.com",relevance_status="relevant",theme_assignment_status="assigned",primary_theme="robotics",classification_confidence=.8)); store.commit(); store.close()
-    created=create_event_research_run(EventResearchRequest(evidence_id="event-1")); deadline=time.time()+5
-    while True:
-        item=get_event_research_run(created["run_id"])
-        if item["status"] in {"completed","failed"} or time.time()>=deadline: break
-        time.sleep(.02)
-    assert item["status"]=="completed"
-    assert item["result"]["fact_pack"]["audit"]["passed"] is True
-    stop_all_workers()
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        create_event_research_run(EventResearchRequest(evidence_id="event-1"))
+    assert exc.value.status_code == 410

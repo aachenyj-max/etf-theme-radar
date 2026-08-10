@@ -37,12 +37,35 @@ export interface ThemeOpportunity {
   evidenceCount: number;
   sourceTypeCount: number;
   updatedAt: string;
+  currentConclusion?: string;
+  reportVersion?: number;
+  lastVerifiedAt?: string;
+  reportId?: string;
+}
+
+export type ThemeCandidateStatus = "signal" | "validating" | "awaiting_confirmation" | "confirmed" | "merged" | "rejected";
+export interface ThemeCandidateMetrics {
+  evidence_count: number; publisher_count: number; source_type_count: number; entity_count: number;
+  official_count: number; acceleration: number; gate_passed: boolean; confirmation_gate_passed: boolean;
+  visualization_blocks: {
+    evidence_timeline: Array<{ date: string; count: number }>;
+    source_diffusion: Array<{ source_type: string; count: number }>;
+    entity_coverage: Array<{ label: string; count: number }>;
+    etf_coverage: { status: "observed" | "not_assessed"; evidence_count: number; note: string };
+  };
+}
+export interface ThemeCandidate {
+  candidate_id: string; proposed_name: string; description: string; status: ThemeCandidateStatus;
+  rationale: string; first_seen_at: string; last_seen_at: string; metrics: ThemeCandidateMetrics;
+  aliases: string[]; entities: Array<{ label: string; entity_type: string; mention_count: number }>;
+  evidence: Array<{ event_id: string; title: string; publisher?: string; source_type: string; published_at?: string }>;
 }
 
 export interface ThemeRadarSnapshot {
   state: Exclude<ThemeRadarLoadState, "idle" | "loading" | "refreshing" | "failed">;
   filters: ThemeRadarFilters;
   themes: ThemeOpportunity[];
+  candidates: ThemeCandidate[];
   totalBeforeFilters: number;
   generatedAt: string;
   coverageNote: string;
@@ -51,6 +74,7 @@ export interface ThemeRadarSnapshot {
 export interface ThemeRadarGateway {
   listThemes(filters: ThemeRadarFilters): Promise<ThemeRadarSnapshot>;
   getTheme(themeId: string): Promise<ThemeOpportunity>;
+  reviewCandidate(candidateId: string, decision: "confirm" | "merge" | "reject", targetThemeId?: string): Promise<void>;
 }
 
 export const allowedRadarTransitions: Record<ThemeRadarLoadState, ThemeRadarLoadState[]> = {

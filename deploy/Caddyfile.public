@@ -1,0 +1,16 @@
+{$RADAR_DOMAIN} {
+	encode zstd gzip
+
+	# Caddy obtains and renews TLS certificates for RADAR_DOMAIN. Internal
+	# application accounts protect the API and all research data.
+	reverse_proxy frontend:3000 {
+		flush_interval -1
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		X-Frame-Options "DENY"
+	}
+}

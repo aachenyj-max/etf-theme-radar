@@ -172,7 +172,7 @@ async function requestRun(path: string, init?: RequestInit): Promise<ResearchRun
 
 export const researchWorkflowGateway: ResearchWorkflowGateway = {
   async createRun(request) {
-    const response = await fetch("/api/research-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: request.topic, objective: request.objective, sources: request.sources, time_range: request.timeRange, custom_date_range: request.customDateRange, output_type: request.outputType }) });
+    const response = await fetch("/api/research-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: request.topic, theme: request.theme, objective: request.objective, output_type: "theme_report" }) });
     if (!response.ok) {
       const payload = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null;
       const detail = payload?.detail;

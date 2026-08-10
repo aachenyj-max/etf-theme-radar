@@ -1,11 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const request = { topic:"机器人",objective:"discover_emerging_themes",sources:["arxiv"],timeRange:"90d",outputType:"theme_report" };
+const request = { topic:"机器人",objective:"analyze_etf_landscape_and_track_industry_momentum",sources:[],timeRange:"multi_horizon",outputType:"theme_report" };
 function run(status:string,stage:string,progress:number){return {run_id:"run-e2e",status,stage,progress,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),request,result:{theme_definition:{theme_id:"robotics",name:"机器人",description:"机器人产业采用研究",aliases:["robotics"],research_questions:["采用？","反方？","覆盖？"],model_used:false}},approvals:[],agent_runs:[],tool_calls:[],steps:[]};}
 async function mockResearchApi(page:Page){
   let status="awaiting_theme_review"; let stage="theme_review"; let progress=12;
   await page.route("**/api/dashboard",route=>route.fulfill({json:{runs:[]}}));
   await page.route("**/api/capabilities",route=>route.fulfill({json:{connectors:[],llm:{configured:false},playwright_mcp:{configured:false},output_types:{theme_report:true,quick_scan:true,etf_opportunity_analysis:true}}}));
+  await page.route("**/api/themes?**",route=>route.fulfill({json:{themes:[{id:"theme_robotics",slug:"robotics",title:"智能机器人",englishTitle:"Intelligent Robotics",description:"机器人产业研究",sector:"industrials",sources:[],stage:"validating",trend:"stable",metrics:{themeScore:74,researchMomentum:76,commercialAdoption:68,etfWhiteSpace:58,companies:31},latestCatalyst:"产业信号",latestEvidence:"跨来源证据",mainRisk:"商业化节奏",evidenceCount:108,sourceTypeCount:6,updatedAt:"刚刚",currentConclusion:"产业动量仍需持续核验",reportVersion:2,lastVerifiedAt:"2026-08-05"}],candidates:[],totalBeforeFilters:1,generatedAt:new Date().toISOString(),coverageNote:"系统自动调度"}}));
   await page.route("**/api/research-runs",async route=>{
     if(route.request().method()==="GET")return route.fulfill({json:{runs:[],total:0,limit:50,offset:0,has_more:false}});
     return route.fulfill({status:202,json:{run_id:"run-e2e"}});
@@ -20,22 +21,33 @@ async function mockResearchApi(page:Page){
 test("主题确认、报告退回、重跑与通过",async({page})=>{
   await mockResearchApi(page); await page.goto("/research");
   await expect(page.locator("select")).toHaveCount(0);
-  await expect(page.getByRole("button",{name:/发现新兴主题/})).toBeVisible();
-  await expect(page.getByRole("button",{name:/主题研究 Theme Research/})).toHaveAttribute("aria-pressed","true");
-  await expect(page.getByRole("button",{name:/SEC ETF 注册与公司文件/})).toBeVisible();
-  await page.getByLabel("研究主题").fill("机器人");
-  await page.getByRole("button",{name:/开始研究/}).click();
-  await expect(page.getByRole("button",{name:"通过并继续"})).toBeVisible();
-  await page.getByRole("button",{name:"通过并继续"}).click();
+  await expect(page.getByRole("heading",{name:"分析 ETF 格局、跟踪产业动量"})).toBeVisible();
+  await expect(page.getByRole("button",{name:/继续研究已确认主题/})).toBeVisible();
+  await expect(page.getByText("选择情报来源")).toHaveCount(0);
+  await page.getByPlaceholder("例如：先进封装与 Chiplet").fill("机器人");
+  await page.getByRole("button",{name:/确认研究边界/}).click();
+  await expect(page.getByRole("button",{name:"确认并深入研究"})).toBeVisible();
+  await page.getByRole("button",{name:"确认并深入研究"}).click();
   await expect(page.getByText("报告已生成，等待你的复核")).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button",{name:"退回"}).last().click();
-  await page.getByRole("textbox",{name:"复核备注"}).fill("补充独立反方来源");
-  await page.getByRole("button",{name:"确认退回"}).click();
-  await expect(page.getByRole("button",{name:/重新运行/})).toBeVisible();
-  await page.getByRole("button",{name:/重新运行/}).click();
+  await page.getByRole("button",{name:"要求补充研究"}).click();
+  await page.getByRole("textbox",{name:"复核备注"}).fill("缺少订单兑现证据，会影响对产业景气持续性的判断");
+  await page.getByRole("button",{name:"提交并重新排队"}).click();
   await expect(page.getByText("报告已生成，等待你的复核")).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button",{name:"通过报告"}).click();
+  await page.getByRole("button",{name:"确认并发布"}).click();
   await expect(page.getByRole("link",{name:/进入报告库/})).toBeVisible();
+});
+
+test("过期主题复核状态显示页内错误且不触发运行时异常",async({page})=>{
+  const pageErrors:string[]=[];
+  page.on("pageerror",error=>pageErrors.push(error.message));
+  await mockResearchApi(page);
+  await page.route("**/api/research-runs/run-e2e/theme-review",route=>route.fulfill({status:409,json:{detail:"当前不在主题复核阶段"}}));
+  await page.goto("/research");
+  await page.getByPlaceholder("例如：先进封装与 Chiplet").fill("机器人");
+  await page.getByRole("button",{name:/确认研究边界/}).click();
+  await page.getByRole("button",{name:"确认并深入研究"}).click();
+  await expect(page.getByText("当前不在主题复核阶段",{exact:true})).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
 
 test("旧版任务列表接口给出明确重启提示",async({page})=>{

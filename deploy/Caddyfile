@@ -1,0 +1,17 @@
+:80 {
+	encode zstd gzip
+
+	# The service is intentionally HTTP only here. Terminate TLS and enforce
+	# company identity at the VPN, Cloudflare Access, or corporate gateway.
+	# Disabling response buffering is required for research-run SSE updates.
+	reverse_proxy frontend:3000 {
+		flush_interval -1
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		X-Frame-Options "DENY"
+	}
+}

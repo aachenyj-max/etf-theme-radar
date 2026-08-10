@@ -8,11 +8,11 @@ from uuid import uuid4
 
 from .agent_runtime import analysis_llm_config, generate_theme_definition, run_research_agent
 from .models import utcnow
-from .ontology import refresh_research_assets
+from .ontology import refresh_run_assets
 from .store import EvidenceStore
 from .output_modes import run_research_output
 from .event_research import run_event_deep_dive
-from .etf_market import collect_market_snapshot, minimum_verified_etfs
+from .etf_market import collect_dual_source_market_snapshot, minimum_verified_etfs
 from .etf_discovery import discover_global_etfs
 from .theme_research import _llm_conclusion
 
@@ -92,12 +92,18 @@ def plan_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
         store.save_step(run_id, run["attempt"], "planning", "running", started_at=now)
         topic_key = str(run["request"]["topic"]).strip().casefold()
         known = next((item for item in store.theme_definitions() if item.get("status") == "confirmed" and topic_key in {str(item.get("theme_id", "")).casefold(), str(item.get("name", "")).casefold(), *(str(alias).casefold() for alias in item.get("aliases", []))}), None)
-        if known and run["request"].get("output_type") == "etf_opportunity_analysis":
+        if known:
             definition = {
                 **known,
                 "include_terms": known.get("aliases", []),
                 "exclude_terms": [],
-                "research_questions": ["ETF 官方持仓覆盖是否充分？", "可投资公司池与产品空白是否可核验？", "哪些证据会否定当前 ETF 机会假设？"],
+                "research_questions": [
+                    "30 天、90 天和 1 年产业动量发生了什么变化？",
+                    "产业链中哪些环节具备可核验的供给壁垒或定价权？",
+                    "代表 ETF 的持仓、集中度、费用、流动性和主题纯度如何？",
+                    "哪些证据会否定当前产业或 ETF 判断？",
+                    "5–10 年乐观、中性和悲观情景各需要什么条件？",
+                ],
                 "model_used": False,
             }
         else:
@@ -107,16 +113,23 @@ def plan_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
                 lambda: build_theme_definition(run["request"]["topic"], run["request"].get("objective", "build_investment_thesis")),
             )
         result = {"theme_definition": definition, "coverage": {}, "available_actions": ["approve_theme", "return_theme"]}
-        auto_continue = bool(known and run["request"].get("output_type") == "etf_opportunity_analysis")
+        auto_continue = bool(known)
         store.save_step(run_id, run["attempt"], "planning", "succeeded", started_at=now, finished_at=utcnow(), details={"model_used": definition["model_used"], "known_theme": bool(known), "auto_continue": auto_continue})
         if auto_continue:
             result["available_actions"] = ["cancel"]
             store.update_research_run(run_id, status="queued", stage="collecting", updated_at=utcnow(), result=result, progress=15, review_gate="")
         else:
-            store.update_research_run(run_id, status="awaiting_theme_review", stage="theme_review", updated_at=utcnow(), result=result, progress=12, review_gate="theme_definition")
+            store.transition_and_promote(
+                run_id, {"planning"}, promote=True, status="awaiting_theme_review",
+                stage="theme_review", updated_at=utcnow(), result=result, progress=12,
+                review_gate="theme_definition", lease_owner="", lease_expires_at="", heartbeat_at="",
+            )
     except Exception as exc:
-        store.update_research_run(run_id, status="failed", stage="planning", updated_at=utcnow(), error=str(exc), progress=0)
-        store.promote_waiting_run(utcnow())
+        store.transition_and_promote(
+            run_id, {"planning"}, promote=True, status="failed", stage="planning",
+            updated_at=utcnow(), error=str(exc), progress=0,
+            lease_owner="", lease_expires_at="", heartbeat_at="",
+        )
     finally:
         if lease_owner:
             store.release_run(run_id, lease_owner)
@@ -145,8 +158,12 @@ def execute_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
             result["agent"] = details["agent"]
             if details["agent"].get("status") == "blocked_configuration":
                 store.save_step(run_id, attempt, step, "failed", started_at=started, finished_at=utcnow(), error=details["agent"].get("error", "模型配置错误"), details=details)
-                store.update_research_run(run_id, status="blocked_configuration", stage="collecting", updated_at=utcnow(), result=result, error=details["agent"].get("error", "模型配置错误"), progress=30)
-                store.promote_waiting_run(utcnow())
+                store.transition_and_promote(
+                    run_id, {"collecting"}, promote=True, status="blocked_configuration",
+                    stage="collecting", updated_at=utcnow(), result=result,
+                    error=details["agent"].get("error", "模型配置错误"), progress=30,
+                    lease_owner="", lease_expires_at="", heartbeat_at="",
+                )
                 return
             store.save_step(run_id, attempt, step, "succeeded", started_at=started, finished_at=utcnow(), details=details)
             store.update_research_run(run_id, status="governing", stage="governing", updated_at=utcnow(), result=result, progress=45)
@@ -162,7 +179,7 @@ def execute_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
             # governance configuration is still applied centrally.
             details = {
                 "classification": "incremental_at_ingest",
-                "research_assets": refresh_research_assets(store),
+                "research_assets": refresh_run_assets(store),
             }
             store.save_step(run_id, attempt, "governing", "succeeded", started_at=started, finished_at=utcnow(), details=details)
             store.update_research_run(run_id, status="analyzing", stage="analyzing", updated_at=utcnow(), result=result, progress=65)
@@ -192,7 +209,11 @@ def execute_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
             audit = result.get("audit") or {"passed": False, "issues": ["缺少审计结果"]}
             audit_status = "succeeded" if audit.get("passed") else "failed"
             store.save_step(run_id, attempt, "auditing", audit_status, started_at=utcnow(), finished_at=utcnow(), details=audit)
-            store.update_research_run(run_id, status="awaiting_report_review", stage="report_review", updated_at=utcnow(), result=result, progress=92, review_gate="final_report")
+            store.transition_and_promote(
+                run_id, {"auditing"}, promote=True, status="awaiting_report_review",
+                stage="report_review", updated_at=utcnow(), result=result, progress=92,
+                review_gate="final_report", lease_owner="", lease_expires_at="", heartbeat_at="",
+            )
     except Exception as exc:
         current = store.research_run(run_id)
         if current and current["status"] != "cancelled":
@@ -201,8 +222,11 @@ def execute_run(database_path: str, run_id: str, lease_owner: str = "") -> None:
                 store.save_step(run_id, current["attempt"], current["stage"], "retrying", finished_at=utcnow(), error=str(exc), retry_count=retry_count + 1)
                 store.update_research_run(run_id, status=current["stage"], stage=current["stage"], updated_at=utcnow(), result=current["result"], error=str(exc))
             else:
-                store.update_research_run(run_id, status="failed", stage=current["stage"], updated_at=utcnow(), result=current["result"], error=str(exc))
-                store.promote_waiting_run(utcnow())
+                store.transition_and_promote(
+                    run_id, {current["status"]}, promote=True, status="failed",
+                    stage=current["stage"], updated_at=utcnow(), result=current["result"],
+                    error=str(exc), lease_owner="", lease_expires_at="", heartbeat_at="",
+                )
     finally:
         if lease_owner:
             store.release_run(run_id, lease_owner)
@@ -256,15 +280,25 @@ def execute_market_refresh(database_path: str, run_id: str, lease_owner: str = "
         detail = dict(result.get("detail") or {})
         landscape = dict(detail.get("landscape") or {})
         competitors = landscape.get("similar_etfs") or []
-        market_snapshot = collect_market_snapshot(
-            competitors, Path("data/cache/yahoo-etf-market")
+        market_snapshot = collect_dual_source_market_snapshot(
+            competitors, landscape.get("theme_etf_snapshot") or {},
+            Path("data/cache/yahoo-etf-market")
         )
+        usable_products = [
+            item for item in market_snapshot.get("products") or []
+            if item.get("data_status") in {"available", "partial", "stale"}
+        ]
+        if not usable_products:
+            raise RuntimeError("天天基金网与 yfinance 均未返回可用新数据；保留最后一次成功快照")
         now = utcnow()
         snapshot_id = str(uuid4())
         errors = [
-            {"ticker": item.get("ticker"), "error": item.get("error")}
+            {"ticker": item.get("ticker"), "source":"yfinance", "error": item.get("error")}
             for item in market_snapshot.get("products") or [] if item.get("error")
         ]
+        for source, state in (market_snapshot.get("source_status") or {}).items():
+            if state.get("status") in {"failed", "unknown", "not_assessed"}:
+                errors.append({"source":source,"error":state.get("error") or f"{source} 本轮无可用更新"})
         store.save_etf_market_snapshot({
             "snapshot_id": snapshot_id, "report_id": report_id,
             "collected_at": now, "market_as_of": market_snapshot.get("market_as_of", ""),

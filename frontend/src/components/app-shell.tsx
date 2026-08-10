@@ -4,15 +4,17 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BarChart3, Beaker, BookOpen, FileText, FolderSearch2, Home, Menu, Search, Settings, X } from "lucide-react";
+import { BarChart3, Beaker, BookOpen, FileText, FolderSearch2, Home, Menu, Search, Settings, TableProperties, X } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { InternalAuthGate } from "@/components/internal-auth-gate";
 
 const navigation = [
   { href: "/", label: "首页", icon: Home },
   { href: "/theme-radar", label: "主题雷达", icon: BarChart3 },
+  { href: "/etf-preview", label: "ETF 预览", icon: TableProperties },
   { href: "/research", label: "研究工作台", icon: FolderSearch2 },
   { href: "/evidence", label: "证据浏览器", icon: BookOpen },
   { href: "/reports", label: "报告库", icon: FileText },
@@ -87,7 +89,7 @@ export function AppShell({ children }: React.PropsWithChildren) {
     const controller=new AbortController(); const timer=window.setTimeout(() => { setSearching(true); void fetch(`/api/search?q=${encodeURIComponent(query.trim())}`,{signal:controller.signal}).then((response)=>response.ok?response.json():Promise.reject()).then((payload:{results:typeof results})=>setResults(payload.results)).catch(()=>undefined).finally(()=>setSearching(false)); },250);
     return () => { window.clearTimeout(timer); controller.abort(); };
   },[query,searchOpen]);
-  return (
+  return <InternalAuthGate>
     <div className="min-h-screen bg-canvas text-ink">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] border-r border-line bg-[#F2F2EE] lg:block"><NavContent /></aside>
       <header className="fixed inset-x-0 top-0 z-20 flex h-16 items-center border-b border-line bg-canvas/95 px-4 backdrop-blur lg:left-[264px] lg:px-8">
@@ -113,5 +115,5 @@ export function AppShell({ children }: React.PropsWithChildren) {
       <main className="min-h-screen pt-16 lg:ml-[264px]">{children}</main>
       <Dialog.Root open={searchOpen} onOpenChange={setSearchOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-ink/25 backdrop-blur-sm" /><Dialog.Content className="fixed left-1/2 top-[14vh] z-50 w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 overflow-hidden rounded-2xl border border-line bg-paper shadow-[0_30px_100px_rgba(16,39,61,.2)] outline-none"><Dialog.Title className="sr-only">全局搜索</Dialog.Title><Dialog.Description className="sr-only">搜索主题、证据和报告</Dialog.Description><div className="flex items-center gap-3 border-b border-line px-5"><Search className="h-5 w-5 text-signal" /><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="输入主题、公司、证据或报告名称" className="h-16 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-muted/60" /><Dialog.Close asChild><Button variant="ghost" size="icon"><X className="h-4 w-4" /></Button></Dialog.Close></div><div className="max-h-[55vh] overflow-y-auto p-3">{query.trim().length<2?<p className="p-6 text-center text-sm text-muted">输入至少两个字符开始检索本地研究资产。</p>:searching?<p className="p-6 text-center text-sm text-muted">正在检索…</p>:results.length===0?<p className="p-6 text-center text-sm text-muted">没有匹配结果。可缩短关键词或先运行数据同步。</p>:<ul className="space-y-1">{results.map((item)=><li key={`${item.kind}-${item.id}`}><Dialog.Close asChild><Link href={item.href} className="block rounded-xl px-4 py-3 transition hover:bg-ink/[0.045]"><div className="flex items-center gap-2"><Badge>{item.kind==="theme"?"主题":item.kind==="report"?"报告":"证据"}</Badge><p className="font-medium text-ink">{item.title}</p></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{item.summary}</p></Link></Dialog.Close></li>)}</ul>}</div></Dialog.Content></Dialog.Portal></Dialog.Root>
     </div>
-  );
+  </InternalAuthGate>;
 }

@@ -1,4 +1,5 @@
 from etf_theme_radar.store import EvidenceStore
+from etf_theme_radar.api import _register_theme_report
 
 
 def test_report_asset_lifecycle(tmp_path):
@@ -30,7 +31,7 @@ def test_report_asset_lifecycle(tmp_path):
         updated_at="2026-07-24T11:00:00Z",
     )
     assert renamed["title"].endswith("更新版")
-    assert renamed["version"] == 2
+    assert renamed["version"] == 1
 
     archived = store.update_report_asset(
         "report-1",
@@ -44,4 +45,23 @@ def test_report_asset_lifecycle(tmp_path):
     assert store.report_asset("report-1") is None
     assert store.report_assets() == []
     assert store.report_assets(include_deleted=True)[0]["deleted_at"] == "2026-07-24T13:00:00Z"
+    store.close()
+
+
+def test_verified_research_appends_one_canonical_theme_report_version_chain(tmp_path):
+    store = EvidenceStore(tmp_path / "versions.db")
+    def result(statement: str) -> dict:
+        return {
+            "status":"WATCH","output_type":"theme_report","theme_definition":{"theme_id":"semiconductors","name":"半导体"},
+            "brief":{"source_types":3},"selected":4,"conclusion":{"statement":statement},"report_markdown":statement,
+            "audit":{"passed":True,"publication_gate":{"passed":True,"failed_checks":[]}},
+            "claims":[{"text":statement,"type":"thesis","evidence_ids":["e-1"]}],
+        }
+    _register_theme_report(store,"run-one","semiconductors",result("第一版结论"))
+    _register_theme_report(store,"run-two","semiconductors",result("第二版结论"))
+    asset=store.report_asset("theme-report:semiconductors")
+    assert asset and asset["version"] == 2 and asset["run_id"] == "run-two"
+    assert asset["summary"] == "第二版结论"
+    assert [item["version"] for item in store.report_versions(asset["report_id"])] == [2,1]
+    assert len(store.report_assets()) == 1
     store.close()

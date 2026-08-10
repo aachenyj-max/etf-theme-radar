@@ -12,7 +12,7 @@ $pythonCommand = if (Test-Path (Join-Path $projectRoot ".venv\Scripts\python.exe
 $apiPort = 8001
 $webPort = 3000
 $serviceId = "etf-theme-radar"
-$contractVersion = "2026-07-31.v4"
+$contractVersion = "2026-08-05.v9"
 $apiBaseUri = "http://127.0.0.1:$apiPort"
 $webUri = "http://127.0.0.1:$webPort"
 
@@ -45,7 +45,7 @@ function Test-RadarContract([string]$BaseUri, [switch]$RequireWorker) {
     return $true
 }
 
-function Wait-ExistingCanonicalServices([int]$Attempts = 90) {
+function Wait-ExistingCanonicalServices([int]$Attempts = 180) {
     for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
         if ((Test-RadarContract $apiBaseUri -RequireWorker) -and (Test-RadarContract $webUri)) { return $true }
         Start-Sleep -Seconds 1
@@ -109,13 +109,13 @@ try {
             }
         }
 
-        for ($attempt = 0; $attempt -lt 90; $attempt++) {
+        for ($attempt = 0; $attempt -lt 180; $attempt++) {
             if ($api -and $api.HasExited) { throw "API exited during startup. Check data\logs\api-error.log." }
             if ($web -and $web.HasExited) { throw "Frontend exited during startup. Check data\logs\frontend-error.log." }
             if ((Test-RadarContract $apiBaseUri -RequireWorker) -and (Test-RadarContract $webUri)) { break }
             Start-Sleep -Seconds 1
         }
-        if (-not ((Test-RadarContract $apiBaseUri -RequireWorker) -and (Test-RadarContract $webUri))) { throw "Canonical services did not pass the contract check within 90 seconds." }
+        if (-not ((Test-RadarContract $apiBaseUri -RequireWorker) -and (Test-RadarContract $webUri))) { throw "Canonical services did not pass the contract check within 180 seconds." }
 
         Write-Host "ETF Theme Radar is running at $webUri"
         Write-Host "API documentation: $apiBaseUri/docs"

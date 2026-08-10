@@ -2,7 +2,7 @@
 
 启用 SEC 数据获取前，必须将 `SEC_USER_AGENT` 设置为包含联系信息的值。不得降低限速、规避访问限制或使用未授权凭据。数据源异常时，请检查 `connector_health` 和 pipeline 错误记录；其他来源应继续运行，同时相应降低结论置信度。
 
-当前唯一已验证的端到端流程是 fixture 演示。示例中的标识、分数和事件均为模拟数据，不能被当作实时信号、真实持仓、AUM、SEC 状态或回测结果。
+主题研究的确定性演示仍使用 fixture；示例中的标识、分数和事件不能被当作实时信号、真实持仓、AUM、SEC 状态或回测结果。ETF 预览另有真实公开数据同步，页面与 API 必须明确显示天天基金来源、采集时间和净值/行情日期。
 
 ## 研究运行实时流
 
@@ -10,15 +10,23 @@
 
 证据进度包含两个口径：`raw_added` 是去重后写入证据库的新记录，`relevant_added` 是确定性治理后归属于当前主题的有效新增。两者不一致是正常现象，前端会展示基线、当前值和两个增量。
 
-任务队列最多包含一个活动项和一个等待项。第三次创建返回 `409` 与 `TASK_QUEUE_FULL`；先完成/取消活动项，或取消等待项。`returned` 不会自动释放活动槽，可选择重跑或调用 `POST /api/research-runs/{run_id}/finish` 结束。使用 `GET /api/research-runs` 检查等待位置与 `needs_attention`。
+任务队列包含一个执行槽、FIFO 多任务等待队列和独立人工处理区，优先级依次为进行中、等待中、需要处理。`awaiting_*`、`returned` 与 `blocked_configuration` 不占执行槽；执行任务进入人工处理或终态时，最早等待项会在同一 SQLite 事务中自动提升。主题审核通过与退回任务重跑先进入等待队列；`returned` 也可调用 `POST /api/research-runs/{run_id}/finish` 结束。使用 `GET /api/research-runs` 检查 `queue_position` 与 `needs_attention`。
 
-若 `GET /api/research-runs` 返回 405 且响应头只允许 POST，说明 8001 仍运行旧契约进程。关闭旧启动窗口或对应的本项目服务后重新启动；v4 启动器不会复用缺少任务列表 GET 的 v3 服务。
+研究执行期间优先订阅 `GET /api/research-runs/{run_id}/stream`。SSE 每次工具开始、结束、证据增量和阶段变化都会发送新的持久化快照；单个慢来源仍在运行时会显示“运行中”，不需要等待最终报告。SSE 断开后前端回退到有限状态轮询。流中不包含模型隐藏思维链，最终报告只在审计完成后冻结。
+
+## 主题发现与复核
+
+来源同步任务由独立持久 `SyncDiscoveryWorker` 领取；每日首次启动使用 `daily:YYYY-MM-DD` 幂等键补采，手动 `POST /api/sync-runs` 只入队，不创建临时线程。同步完成后自动对最近 30 日未归类证据执行确定性聚类。门槛来自 `config/defaults.yaml` 的 `theme_discovery`，不得在前端或模型提示词中另设口径。
+
+通过 `GET /api/theme-candidates` 检查候选及四类证据视图。`signal` 和 `validating` 仅用于观察；达到确认门槛后仍须人工调用 `POST /api/theme-candidates/{candidate_id}/review` 执行 `confirm`、`merge` 或 `reject`。三种动作均为 SQLite 原子事务，终态不会被后续发现覆盖。ETF 无可靠覆盖时显示 `not_assessed`，不得用缺失 ETF 证据否定主题。
+
+若主题候选接口返回 404/405，说明 8001 仍运行旧契约进程。关闭旧启动窗口或对应的本项目服务后重新启动；v5 启动器不会复用缺少候选主题路由的旧服务。
 
 ## DeepSeek Agent 配置
 
 复制 `.env.example` 为本地 `.env`，设置新的 `DEEPSEEK_API_KEY`。默认由 `deepseek-v4-flash` 执行阶段内工具选择，由 `deepseek-v4-pro` 执行主题定义与最终证据分析。旧的 `deepseek-chat`、`deepseek-reasoner` 名称不再使用。
 
-Agent 只能调用注册的公开来源工具，标准档默认最多 6 个模型轮次、12 次工具调用和 480 秒。ETF 机会分析使用 240 秒快速档，最多 4 次模型请求和 8 次工具调用，优先缓存、官方 ETF 持仓与 Yahoo Finance ETF 公开资讯；官方持仓缓存 6 小时，Yahoo 元数据缓存 30 分钟。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
+Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6 次模型请求、12 次工具调用和 480 秒，自动同时覆盖产业动量与 ETF 格局；来源优先级为现有证据/缓存、官方 ETF 持仓、天天基金快照、yfinance，再按缺口补学术、招聘、专利线索和反方检索。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
 
 通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。通过 `GET /api/research-runs/{run_id}` 查看 `agent_runs` 与 `tool_calls`。响应不会包含 API key 或模型隐藏推理内容。
 
@@ -26,14 +34,33 @@ Agent 只能调用注册的公开来源工具，标准档默认最多 6 个模�
 
 ## ETF 市场快照
 
-包含 ETF 章节且授权 `etf_news` 的报告可通过 `POST /api/reports/{report_id}/market-snapshot` 创建持久刷新任务。任务只写入独立 `etf_market_snapshots`，不改变报告版本、正文哈希或结论。请求按 ticker 节流，对 429 有限退避并记录失败冷却；失败时优先返回最后成功缓存并标记 `stale`/`stale_if_error`，没有历史成功值时才显示不可用。指标包括 1月价格收益、最新价与成交活跃度等；成交活跃度不代表买入人数或资金流。
+主题报告可通过 `POST /api/reports/{report_id}/market-snapshot` 创建持久双源刷新任务。Worker 读取报告冻结的 ETF 候选和天天基金主题子快照，再逐 ticker 调用 yfinance；任务只写入独立 `etf_market_snapshots`，不改变报告版本、正文哈希或结论。请求按 ticker 节流，对 429 按 `refresh_retry_attempts` 与 `refresh_retry_backoff_seconds` 有限退避并记录冷却；逐产品和逐来源错误分别保存。两源均无有效产品时任务失败且不写新快照，最后成功快照继续可读。
+
+双源核验不是强制要求所有字段在两个来源都存在。只有产品身份和日期可比时才返回 `consistent` 或 `conflict`；其余字段返回 `single_source`，同时在 `field_provenance`、`sources` 和 `source_status` 中保留来源、日期、URL、失败原因及缓存状态。成交活跃度不代表买入人数或资金流。
+
+报告发布前检查 `audit.publication_gate`。核心结论、产业链、增长驱动力、ETF 角度、风险、三种情景、七项评分、证据缺口解释、有效 claim-evidence 引用、反方检查和 ETF 字段来源均通过后，用户才能确认发布。失败时只能要求补充研究，不能提升主报告版本。
+
+## ETF 预览同步
+
+每个工作日北京时间 08:00，`SyncDiscoveryWorker` 会以日期幂等键排队一次天天基金同步。手动调用 `POST /api/etf-preview/refresh` 只创建或复用任务，前端不得因网络错误自动重放。通过 `GET /api/sync-runs/{sync_run_id}` 查看进度，通过 `GET /api/etf-preview` 读取最后一次成功快照；同步失败不会用空数据覆盖旧快照。
+
+本地诊断命令：
+
+```powershell
+python -m etf_theme_radar.cli etf-preview-sync --db data/radar.db
+python -m etf_theme_radar.cli etf-preview-audit --db data/radar.db
+```
+
+公开页面缓存位于 `data/cache/tiantian-etf-preview`。动态数据默认缓存30分钟，基金档案缓存6小时；逐基金请求限速且不得绕过验证码、登录或访问限制。溢价审计必须同时检查 `market_date`、`market_price`、`same_day_nav` 和 `premium_source`。跨境基金净值滞后是正常现象，系统改用对应净值日的历史收盘价，不允许用最新价格除以前一日净值。
 
 ## 故障排查
 
 - `SEC_USER_AGENT is required`：在本地 `.env` 中设置联系人型 User-Agent，且不要提交该文件。
 - Connector 状态为 `disabled`：检查环境变量中的开关；关闭可选来源不应影响 fixture 或其他来源。
 - 外部请求失败：保留错误记录，使用缓存或 fixture 验证流程，不得伪造抓取结果。
+- ETF 行情刷新长期排队：检查是否存在 `report-refresh:*` 任务和 Worker heartbeat；刷新任务应在当前阶段释放 lease 后优先领取。单次最多 6 只、逐 ticker 8 秒，空响应记为失败；报告详情表会显示逐只错误，只有非空的历史缓存才能作为 stale 快照回退。
 - `blocked_configuration`：检查 key、账户权限、`LLM_BASE_URL` 和 V4 模型名，修复后重新运行任务。
+- 冷启动超过 90 秒：v6 启动器会继续等待到 180 秒；若仍失败，读取 `data/logs/api-error.log` 与 `frontend-error.log`，不得改用其他端口绕过。
 ## 历史证据摘要升级
 
 先使用 dry-run 查看仍包含旧固定模板的报告：

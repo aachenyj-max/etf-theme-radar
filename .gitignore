@@ -13,6 +13,8 @@ data/reports/
 data/runtime/
 data/test-tmp/
 .env
+deploy/.env.production
+backups/
 logs/
 frontend/node_modules/
 frontend/.next/
