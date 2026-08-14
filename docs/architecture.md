@@ -58,6 +58,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 
 任务 1.6 当前应用表增加至 38 张，新增 `independent_score_snapshots`；研究结果新增三个独立评分维度，契约版本提升为 `2026-08-14.v12`。三个维度仅共享主题和运行范围，不计算跨维度综合分。
 
+阶段 1 的治理顺序固定为：持久 Goal 领取与 lease 隔离 → 原文完整性评估 → 逐条事实抽取审计 → 研究/刷新边界 → 独立评分持久化。历史回填复用同一质量与抽取函数，并以内容哈希、解析版本和恢复点保证幂等；任何下游报告都不能把未通过质量门、不可比 ETF 字段或 `not_assessed` 维度转换成肯定结论。
+
 | 领域 | 表 |
 |---|---|
 | 原始证据与治理 | `raw_documents`、`normalized_events`、`citations`、`connector_health` |

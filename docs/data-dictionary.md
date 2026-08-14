@@ -35,6 +35,8 @@
 | `candidate_evidence` / `candidate_entities` / `candidate_aliases` | 保存候选与证据、实体和临时别名的可追溯关系。 |
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |
 
+阶段 1 契约共 38 张应用表。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
+
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
 
 Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued → planning → collecting/extracting → validating → replanning（可选） → completed/partial/needs_attention`；排队取消直接进入 `cancelled`，活动取消先置 `cancel_requested`，再由 lease owner 确认终止。过期活动 lease 可被新 owner 原阶段恢复，`attempt` 增加且追加 `recovered` 事件。
