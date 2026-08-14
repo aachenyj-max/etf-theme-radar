@@ -138,6 +138,23 @@ def test_preview_snapshot_store_is_immutable_and_latest_wins(tmp_path: Path) -> 
     store.close()
 
 
+def test_preview_store_rejects_empty_snapshot_without_replacing_last_success(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "preview-empty.db")
+    good = {
+        "snapshot_id": "good", "collected_at": "2026-08-14T00:00:00+00:00",
+        "market_as_of": "2026-08-13", "status": "available", "source": "天天基金网",
+        "total": 1, "categories": {"exchange": [{"code": "513100"}]},
+    }
+    assert store.save_etf_preview_snapshot(good) is True
+    assert store.save_etf_preview_snapshot({
+        "snapshot_id": "empty", "collected_at": "2026-08-14T01:00:00+00:00",
+        "market_as_of": "", "status": "unknown", "source": "天天基金网",
+        "total": 0, "categories": {},
+    }) is False
+    assert store.latest_etf_preview_snapshot()["snapshot_id"] == "good"
+    store.close()
+
+
 def test_theme_link_uses_explicit_terms_and_preserves_snapshot_provenance() -> None:
     snapshot = {
         "snapshot_id": "preview-one", "collected_at": "2026-08-05T00:00:00+00:00",
@@ -201,7 +218,8 @@ def test_preview_sync_has_priority_and_persists_without_mutating_old_snapshot(tm
     store.save_etf_preview_snapshot({
         "snapshot_id": "old", "collected_at": "2026-08-04T00:00:00+00:00",
         "market_as_of": "2026-08-03", "status": "available", "source": "天天基金网",
-        "categories": {"sp500": [], "exchange": [], "active": []}, "counts": {}, "total": 0, "errors": [],
+        "categories": {"sp500": [{"code": "513500"}], "exchange": [], "active": []},
+        "counts": {"sp500": 1}, "total": 1, "errors": [],
     })
     store.create_sync_run("normal", "2026-08-05T00:00:00+00:00", days=7, idempotency_key="manual:normal")
     store.create_sync_run("preview", "2026-08-05T00:01:00+00:00", days=0, idempotency_key="etf-preview:manual:preview")
@@ -215,7 +233,8 @@ def test_preview_sync_has_priority_and_persists_without_mutating_old_snapshot(tm
     monkeypatch.setattr("etf_theme_radar.sync_worker.collect_etf_preview_snapshot", lambda **_kwargs: {
         "snapshot_id": "new", "collected_at": "2026-08-05T00:03:00+00:00",
         "market_as_of": "2026-08-04", "status": "available", "source": "天天基金网",
-        "categories": {"sp500": [], "exchange": [], "active": []}, "counts": {}, "total": 0, "errors": [],
+        "categories": {"sp500": [{"code": "513500"}], "exchange": [], "active": []},
+        "counts": {"sp500": 1}, "total": 1, "errors": [],
     })
     worker = SyncDiscoveryWorker(database)
     assert worker.run_once() is True

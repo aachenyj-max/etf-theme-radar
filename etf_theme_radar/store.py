@@ -1540,10 +1540,12 @@ class EvidenceStore:
         row = self.conn.execute("SELECT * FROM report_assets WHERE report_id=? AND deleted_at IS NULL", (report_id,)).fetchone()
         return dict(zip(columns, row)) if row else None
 
-    def save_etf_market_snapshot(self, item: dict) -> None:
+    def save_etf_market_snapshot(self, item: dict) -> bool:
         payload = dict(item.get("payload") or {})
         products = item.get("products", payload.get("products", []))
         errors = item.get("errors", payload.get("errors", []))
+        if not products:
+            return False
         self.conn.execute(
             """INSERT OR REPLACE INTO etf_market_snapshots
             (snapshot_id,report_id,collected_at,market_as_of,status,products_json,errors_json,payload_json)
@@ -1558,6 +1560,7 @@ class EvidenceStore:
             ),
         )
         self.commit()
+        return True
 
     def latest_etf_market_snapshot(self, report_id: str) -> dict | None:
         row = self.conn.execute(
@@ -1574,7 +1577,11 @@ class EvidenceStore:
             item[key] = json.loads(item[key] or json.dumps(fallback))
         return item
 
-    def save_etf_preview_snapshot(self, item: dict) -> None:
+    def save_etf_preview_snapshot(self, item: dict) -> bool:
+        categories = item.get("categories") or {}
+        total = int(item.get("total") or sum(len(values) for values in categories.values()))
+        if total <= 0:
+            return False
         self.conn.execute(
             """INSERT OR REPLACE INTO etf_preview_snapshots
             (snapshot_id,collected_at,market_as_of,status,source,payload_json)
@@ -1586,6 +1593,7 @@ class EvidenceStore:
             ),
         )
         self.commit()
+        return True
 
     def latest_etf_preview_snapshot(self) -> dict | None:
         row = self.conn.execute(

@@ -196,7 +196,7 @@ def test_aiq_wtai_rate_limit_baseline_fixture_isolated_per_ticker(tmp_path: Path
     assert [item["error"] for item in snapshot["products"]] == [errors["AIQ"], errors["WTAI"]]
 
 
-def test_dual_source_snapshot_preserves_field_provenance_and_conflicts(tmp_path: Path) -> None:
+def test_dual_source_snapshot_preserves_provenance_but_refuses_cross_date_validation(tmp_path: Path) -> None:
     snapshot = collect_dual_source_market_snapshot(
         [{"ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF", "currency": "CNY"}],
         {
@@ -209,8 +209,10 @@ def test_dual_source_snapshot_preserves_field_provenance_and_conflicts(tmp_path:
     assert {item["name"] for item in product["sources"]} == {"Yahoo Finance via yfinance", "天天基金网"}
     assert product["field_provenance"]["last_close"] == "yfinance"
     assert product["field_provenance"]["operating_fee"] == "tiantian"
-    assert product["cross_source_validation"]["status"] == "conflict"
-    assert snapshot["validation_summary"]["conflict"] == 1
+    assert product["cross_source_validation"]["status"] == "not_comparable"
+    assert product["cross_source_validation"]["reason_code"] == "date_mismatch"
+    assert product["cross_source_validation"]["conflicts"] == []
+    assert snapshot["validation_summary"]["not_comparable"] == 1
 
 
 def test_failed_dual_refresh_does_not_overwrite_last_successful_snapshot(tmp_path: Path, monkeypatch) -> None:
@@ -229,4 +231,117 @@ def test_failed_dual_refresh_does_not_overwrite_last_successful_snapshot(tmp_pat
     store=EvidenceStore(database)
     assert store.latest_etf_market_snapshot("report:retain")["snapshot_id"] == "good"
     assert store.research_run("failed-refresh")["status"] == "failed"
+    store.close()
+
+
+def _dated_rows(as_of: str, close: float = 100.0) -> list[dict]:
+    rows = _rows()
+    rows[-1] = {"date": f"{as_of}T00:00:00+00:00", "close": close, "volume": 1_000_000}
+    return rows
+
+
+def test_dual_source_does_not_merge_same_code_with_conflicting_product_identity(tmp_path: Path) -> None:
+    snapshot = collect_dual_source_market_snapshot(
+        [{
+            "ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF",
+            "currency": "CNY", "isin": "US0000000001",
+        }],
+        {
+            "status": "available", "market_as_of": "2026-08-04",
+            "products": [{
+                "code": "513100", "name": "Nasdaq ETF", "isin": "CN0000000002",
+                "market_date": "2026-08-04", "market_price": 100.0,
+                "source_url": "https://fund.eastmoney.com/513100.html",
+            }],
+        },
+        tmp_path / "identity-cache", lambda _ticker: _dated_rows("2026-08-04"),
+    )
+
+    assert len(snapshot["products"]) == 2
+    assert all(item["cross_source_validation"]["status"] == "single_source" for item in snapshot["products"])
+    assert {item["cross_source_validation"].get("reason_code") for item in snapshot["products"]} == {
+        "product_identity_mismatch"
+    }
+
+
+def test_dual_source_refuses_cross_validation_when_dates_are_not_comparable(tmp_path: Path) -> None:
+    snapshot = collect_dual_source_market_snapshot(
+        [{
+            "ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF",
+            "currency": "CNY", "isin": "CN0000000001",
+        }],
+        {
+            "status": "available", "market_as_of": "2026-08-03",
+            "products": [{
+                "code": "513100", "name": "Nasdaq ETF", "isin": "CN0000000001",
+                "market_date": "2026-08-03", "market_price": 100.0,
+                "source_url": "https://fund.eastmoney.com/513100.html",
+            }],
+        },
+        tmp_path / "date-cache", lambda _ticker: _dated_rows("2026-08-04"),
+    )
+
+    validation = snapshot["products"][0]["cross_source_validation"]
+    assert validation["status"] == "not_comparable"
+    assert validation["reason_code"] == "date_mismatch"
+    assert validation["comparable_fields"] == []
+
+
+def test_dual_source_refuses_cross_validation_when_same_day_field_conflicts(tmp_path: Path) -> None:
+    snapshot = collect_dual_source_market_snapshot(
+        [{
+            "ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF",
+            "currency": "CNY", "isin": "CN0000000001",
+        }],
+        {
+            "status": "available", "market_as_of": "2026-08-04",
+            "products": [{
+                "code": "513100", "name": "Nasdaq ETF", "isin": "CN0000000001",
+                "market_date": "2026-08-04", "market_price": 90.0,
+                "source_url": "https://fund.eastmoney.com/513100.html",
+            }],
+        },
+        tmp_path / "field-cache", lambda _ticker: _dated_rows("2026-08-04", 100.0),
+    )
+
+    validation = snapshot["products"][0]["cross_source_validation"]
+    assert validation["status"] == "not_comparable"
+    assert validation["reason_code"] == "field_mismatch"
+    assert validation["conflicts"] == [{"field": "market_price", "yfinance": 100.0, "tiantian": 90.0}]
+
+
+def test_ticker_cooldown_blocks_repeat_request_even_without_success_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setitem(etf_market.SETTINGS, "refresh_retry_attempts", 1)
+    cache = tmp_path / "cooldown-cache"
+    fund = {"ticker": "AIQ", "issuer": "Example", "category": "AI"}
+    first = collect_market_snapshot(
+        [fund], cache,
+        lambda _ticker: (_ for _ in ()).throw(RuntimeError("429 rate limited")),
+    )
+    repeated: list[str] = []
+    second = collect_market_snapshot(
+        [fund], cache,
+        lambda ticker: repeated.append(ticker) or _rows(),
+    )
+
+    assert first["products"][0]["data_status"] == "unavailable"
+    assert repeated == []
+    assert second["products"][0]["cache_status"] == "cooldown"
+    assert "冷却" in second["products"][0]["error"]
+
+
+def test_store_rejects_empty_market_snapshot_without_replacing_last_success(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "empty-market.db")
+    good = {
+        "snapshot_id": "good", "report_id": "report:one",
+        "collected_at": "2026-08-14T00:00:00+00:00", "market_as_of": "2026-08-13",
+        "status": "available", "products": [{"ticker": "BOTZ"}],
+    }
+    assert store.save_etf_market_snapshot(good) is True
+    assert store.save_etf_market_snapshot({
+        "snapshot_id": "empty", "report_id": "report:one",
+        "collected_at": "2026-08-14T01:00:00+00:00", "market_as_of": "",
+        "status": "unknown", "products": [],
+    }) is False
+    assert store.latest_etf_market_snapshot("report:one")["snapshot_id"] == "good"
     store.close()

@@ -173,10 +173,16 @@ def collect_market_snapshot(
                 if fresh_cache and cache_file.exists():
                     cache_file.unlink()
                 cooling_down = failure_file.exists() and time.time() - failure_file.stat().st_mtime <= cooldown_seconds
-                if cooling_down and cache_file.exists():
-                    rows = json.loads(cache_file.read_text(encoding="utf-8"))
-                    cache_status = "stale_if_error"
-                    error = "近期请求失败，处于冷却期；已使用最后一次成功缓存。"
+                if cooling_down:
+                    if cache_file.exists():
+                        rows = json.loads(cache_file.read_text(encoding="utf-8"))
+                        cache_status = "stale_if_error"
+                        error = "近期请求失败，处于冷却期；已使用最后一次成功缓存。"
+                    else:
+                        cache_status = "cooldown"
+                        error = "近期请求失败，当前 ticker 处于冷却期；本轮未重复请求。"
+                        metrics = {"data_status": "unavailable"}
+                        content_hash = ""
                 else:
                     last_error: Exception | None = None
                     retry_attempts = max(1, int(SETTINGS.get("refresh_retry_attempts", 3)))
@@ -199,8 +205,9 @@ def collect_market_snapshot(
                     if failure_file.exists():
                         failure_file.unlink()
                     cache_status = "miss"
-            metrics = calculate_market_metrics(rows)
-            content_hash = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+            if cache_status != "cooldown":
+                metrics = calculate_market_metrics(rows)
+                content_hash = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
         except Exception as exc:
             error = str(exc)[:300]
             failure_file.write_text(json.dumps({"failed_at": datetime.now(timezone.utc).isoformat(), "error": error}, ensure_ascii=False), encoding="utf-8")
@@ -227,6 +234,7 @@ def collect_market_snapshot(
             "issuer": fund.get("issuer", ""),
             "category": fund.get("category", ""),
             "fund_name": fund.get("fund_name", ""),
+            "isin": fund.get("isin", ""),
             "exchange": fund.get("exchange", ""),
             "listing_market": fund.get("listing_market", "United States"),
             "official_url": fund.get("official_url") or fund.get("holdings_url", ""),
@@ -328,6 +336,7 @@ def collect_dual_source_market_snapshot(
         }
         matched = by_identity.get(identity)
         tiantian_fields = {
+            "market_price": fund.get("market_price"),
             "operating_fee": fund.get("operating_fee"),
             "aum_billion_cny": fund.get("scale_billion"),
             "return_2025": fund.get("return_2025"),
@@ -337,23 +346,69 @@ def collect_dual_source_market_snapshot(
             "tracking_index": fund.get("tracking_index"),
         }
         if matched:
+            yahoo_isin = str(matched.get("isin") or "").upper().strip()
+            tiantian_isin = str(fund.get("isin") or "").upper().strip()
+            if yahoo_isin and tiantian_isin and yahoo_isin != tiantian_isin:
+                mismatch = {
+                    "status": "single_source", "comparable_fields": [], "conflicts": [],
+                    "reason_code": "product_identity_mismatch",
+                    "reason": "产品 ISIN 不一致，禁止合并或交叉验证。",
+                }
+                matched["cross_source_validation"] = mismatch
+                converted = {
+                    "ticker": str(fund.get("code") or ""),
+                    "fund_name": str(fund.get("name") or ""),
+                    "isin": tiantian_isin,
+                    "issuer": str(fund.get("manager") or ""),
+                    "category": str(fund.get("category_label") or fund.get("category") or ""),
+                    "exchange": str(fund.get("exchange") or "China fund market"),
+                    "listing_market": "China", "currency": "CNY",
+                    "official_url": str(fund.get("source_url") or ""),
+                    "source_url": str(fund.get("source_url") or ""),
+                    "data_status": "available", "as_of": source_record["as_of"],
+                    "sources": [source_record],
+                    "field_provenance": {key: "tiantian" for key, value in tiantian_fields.items() if value is not None},
+                    "cross_source_validation": mismatch,
+                    **{key: value for key, value in tiantian_fields.items() if value is not None},
+                }
+                products.append(converted)
+                continue
             matched["sources"].append(source_record)
             matched.update({key: value for key, value in tiantian_fields.items() if value is not None})
             matched["field_provenance"].update({key: "tiantian" for key, value in tiantian_fields.items() if value is not None})
+            yahoo_date = str(item_date)[:10] if (item_date := matched.get("as_of")) else ""
+            tiantian_date = str(source_record["as_of"] or "")[:10]
+            if not yahoo_date or not tiantian_date or yahoo_date != tiantian_date:
+                matched["cross_source_validation"] = {
+                    "status": "not_comparable", "comparable_fields": [], "conflicts": [],
+                    "reason_code": "date_mismatch",
+                    "reason": "两来源日期不一致，禁止交叉验证。",
+                }
+                continue
             conflicts = []
+            comparable_fields = []
             yahoo_name = str(matched.get("fund_name") or "").casefold().strip()
             tiantian_name = str(fund.get("name") or "").casefold().strip()
-            if yahoo_name and tiantian_name and yahoo_name != tiantian_name:
-                conflicts.append({"field": "fund_name", "yfinance": matched.get("fund_name"), "tiantian": fund.get("name")})
+            if yahoo_name and tiantian_name:
+                comparable_fields.append("fund_name")
+                if yahoo_name != tiantian_name:
+                    conflicts.append({"field": "fund_name", "yfinance": matched.get("fund_name"), "tiantian": fund.get("name")})
+            if matched.get("last_close") is not None and fund.get("market_price") is not None:
+                comparable_fields.append("market_price")
+                if float(matched["last_close"]) != float(fund["market_price"]):
+                    conflicts.append({"field": "market_price", "yfinance": matched["last_close"], "tiantian": fund["market_price"]})
             matched["cross_source_validation"] = {
-                "status": "conflict" if conflicts else "consistent",
-                "comparable_fields": ["product_identity", "fund_name"],
+                "status": "not_comparable" if conflicts or not comparable_fields else "consistent",
+                "comparable_fields": comparable_fields,
                 "conflicts": conflicts,
+                "reason_code": "field_mismatch" if conflicts else "no_comparable_fields" if not comparable_fields else "",
+                "reason": "可比字段不一致，禁止标记为双源验证。" if conflicts else "没有同口径字段可供交叉验证。" if not comparable_fields else "同产品、同日期、同口径字段一致。",
             }
             continue
         converted = {
             "ticker": str(fund.get("code") or ""),
             "fund_name": str(fund.get("name") or ""),
+            "isin": str(fund.get("isin") or ""),
             "issuer": str(fund.get("manager") or ""),
             "category": str(fund.get("category_label") or fund.get("category") or ""),
             "exchange": str(fund.get("exchange") or "China fund market"),
@@ -397,6 +452,7 @@ def collect_dual_source_market_snapshot(
         "validation_summary": {
             "consistent": sum(item.get("cross_source_validation", {}).get("status") == "consistent" for item in products),
             "conflict": sum(item.get("cross_source_validation", {}).get("status") == "conflict" for item in products),
+            "not_comparable": sum(item.get("cross_source_validation", {}).get("status") == "not_comparable" for item in products),
             "single_source": sum(item.get("cross_source_validation", {}).get("status") == "single_source" for item in products),
         },
         "limitations": [

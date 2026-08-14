@@ -52,7 +52,7 @@ Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`ag
 
 主题报告可通过 `POST /api/reports/{report_id}/market-snapshot` 创建持久双源刷新任务。Worker 读取报告冻结的 ETF 候选和天天基金主题子快照，再逐 ticker 调用 yfinance；任务只写入独立 `etf_market_snapshots`，不改变报告版本、正文哈希或结论。请求按 ticker 节流，对 429 按 `refresh_retry_attempts` 与 `refresh_retry_backoff_seconds` 有限退避并记录冷却；逐产品和逐来源错误分别保存。两源均无有效产品时任务失败且不写新快照，最后成功快照继续可读。
 
-双源核验不是强制要求所有字段在两个来源都存在。只有产品身份和日期可比时才返回 `consistent` 或 `conflict`；其余字段返回 `single_source`，同时在 `field_provenance`、`sources` 和 `source_status` 中保留来源、日期、URL、失败原因及缓存状态。成交活跃度不代表买入人数或资金流。
+双源核验不是强制要求所有字段在两个来源都存在。只有产品身份、日期和字段口径均可比且值一致时才返回 `consistent`。ISIN 冲突拆为两个 `single_source` 产品；跨日期、同日字段值冲突或没有共同口径字段时返回 `not_comparable` 并记录原因码。`field_provenance`、`sources` 和 `source_status` 保留来源、日期、URL、失败原因及缓存状态。单 ticker 冷却即使没有成功缓存也会跳过重复请求；市场与预览空快照由存储层拒绝。成交活跃度不代表买入人数或资金流。
 
 报告发布前检查 `audit.publication_gate`。核心结论、产业链、增长驱动力、ETF 角度、风险、三种情景、七项评分、证据缺口解释、有效 claim-evidence 引用、反方检查和 ETF 字段来源均通过后，用户才能确认发布。失败时只能要求补充研究，不能提升主报告版本。
 

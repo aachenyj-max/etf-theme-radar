@@ -6,8 +6,8 @@
 - `tool_calls.relevant_evidence_delta`：其中治理后归属于当前研究主题的有效证据数。
 - `tool_calls.coverage_before_json` / `coverage_after_json`：工具调用前后的确定性主题覆盖。
 - 报告 `detail.landscape.market_snapshot`：旧报告兼容字段；读取时标记为 `legacy_report_snapshot`。
-- `etf_market_snapshots`：独立 ETF 现状，包含 `snapshot_id`、`report_id`、`collected_at`、`market_as_of`、状态、逐 ticker 产品、错误摘要和完整 payload。`source_status` 记录天天基金/yfinance 各自状态，产品 `sources`、`field_provenance` 与 `cross_source_validation` 记录来源、日期、单源/一致/冲突状态。刷新不改变报告版本；两源均空时不新增记录。
-- `etf_preview_snapshots`：天天基金 ETF 预览不可变快照，保存三类产品、分类数量、源错误、采集/净值日期、计算方法和字段级来源 URL。读取时只返回最新快照。
+- `etf_market_snapshots`：独立 ETF 现状，包含 `snapshot_id`、`report_id`、`collected_at`、`market_as_of`、状态、逐 ticker 产品、错误摘要和完整 payload。`source_status` 记录天天基金/yfinance 各自状态，产品 `sources`、`field_provenance` 与 `cross_source_validation` 记录来源、日期和 `single_source`/`consistent`/`not_comparable` 状态；`reason_code` 区分 `product_identity_mismatch`、`date_mismatch`、`field_mismatch` 与 `no_comparable_fields`。刷新不改变报告版本；产品为空时存储入口返回 `False` 且不新增记录。
+- `etf_preview_snapshots`：天天基金 ETF 预览不可变快照，保存三类产品、分类数量、源错误、采集/净值日期、计算方法和字段级来源 URL。总产品数为零时存储入口返回 `False`；读取只返回最后一次非空快照。
 - `detail.landscape.theme_etf_snapshot`：报告版本内冻结的主题相关 ETF 预览子集，包含原预览 `snapshot_id`、行情日期、匹配词、匹配字段、相关性分和产品字段；只允许确定性名称/别名/跟踪指数匹配。
 - `research_runs.queue_position`：等待任务的位置；活动任务和历史任务为 `NULL`。
 - `buyer_count_status` 固定为 `not_available`；`fund_flow_status` 在没有可靠官方资金流来源时为 `not_assessed`。
