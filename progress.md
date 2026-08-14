@@ -405,7 +405,7 @@ flowchart LR
 - 新建：`etf_theme_radar/content_quality.py`、`etf_theme_radar/fact_extraction.py`、`etf_theme_radar/agent_goals.py`。
 - 测试：`tests/test_content_quality.py`、`tests/test_fact_extraction.py`、`tests/test_agent_goals.py`、现有 ETF/Worker/评分测试。
 
-- [ ] **任务 1.1：迁移 Agent Goal、事件和并发 lease 表**
+- [x] **任务 1.1：迁移 Agent Goal、事件和并发 lease 表**
   - 定义幂等 Goal 创建、原子领取、heartbeat、取消、恢复、预留交互/后台槽位和动态降并发接口。
   - 先写状态转换与 Worker 重启测试，再修改 store/runtime。
   - 运行：`python -m pytest tests/test_agent_goals.py tests/test_agent_runtime.py tests/test_worker_reliability.py -q`。
@@ -602,3 +602,4 @@ flowchart LR
 | 2026-08-14 | 阶段 0 / 任务 0.1 | `3b294e6` | `python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`：8 passed；`python -m pytest -q`：98 passed | 无；契约版本未改变，任务 0.2 尚未开始 |
 | 2026-08-14 | 阶段 0 / 任务 0.2 | `a8974fd` | `python -m pytest tests/test_evidence_summaries.py tests/test_etf_market.py -q`：18 passed；`python -m pytest -q`：101 passed | 标题式摘要和持仓导航噪声仅完成基线冻结，留待阶段 1 修复；任务 0.3 尚未开始 |
 | 2026-08-14 | 阶段 0 / 任务 0.3 | `ac958be` | 0.1 回归：8 passed；0.2 回归：18 passed；`python -m pytest -q`：101 passed；契约导出：31 张表、`2026-08-05.v9` | 阶段 0 验收通过；阶段 1 尚未开始 |
+| 2026-08-14 | 阶段 1 / 任务 1.1 | `b9b3260` | `python -m pytest tests/test_agent_goals.py tests/test_agent_runtime.py tests/test_worker_reliability.py -q`：24 passed；相关契约/启动器回归合计 32 passed；`python -m pytest -q`：111 passed；契约导出：34 张表、`2026-08-14.v10` | 无；任务 1.2 尚未开始 |
