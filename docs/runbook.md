@@ -28,7 +28,7 @@
 
 Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6 次模型请求、12 次工具调用和 480 秒，自动同时覆盖产业动量与 ETF 格局；来源优先级为现有证据/缓存、官方 ETF 持仓、天天基金快照、yfinance，再按缺口补学术、招聘、专利线索和反方检索。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
 
-通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v13` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看旧研究运行审计，通过对话消息返回的 `goal.goal_id` 检查新交互 Goal。响应不会包含 API key 或模型隐藏推理内容。
+通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v14` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看旧研究运行审计，通过对话消息返回的 `goal.goal_id` 检查新交互 Goal。响应不会包含 API key 或模型隐藏推理内容。
 
 新入库事件的完整性结果可在 SQLite `content_quality_results` 中按 `event_id` 检查。首页证据数突然下降时，先按 `status`、`missing_fields_json` 和 `issues_json` 汇总，不要删除原始事件或手工改成 `publishable`。`needs_enrichment` 等待重抽取，`rejected` 仍保留原始文档用于审计；`config/defaults.yaml` 的 `maximum_boilerplate_ratio` 默认 0.25。
 
@@ -55,6 +55,8 @@ Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`ag
 上下文权限异常时，先检查记忆/知识项的 `owner_user_id`、`allowed_user_ids`，以及关联摘要的 `conversation_id` 是否出现在当前对话显式允许集合中。构建审计只应显示各层拒绝数量，不能记录被拒绝内容。若关键消息未进入上下文，检查该项 `token_count`、总 `token_budget` 和 `truncated_layers`；高信任层被截断后低信任层保持空白是预期行为。任务 2.2 回归命令为 `python -m pytest tests/test_context_builder.py tests/test_ontology_and_security.py -q`。
 
 三响应模式诊断：`answer_now` 出现工具调用表示路由或调用方越界；`quick_retrieve` 的 `retrieval_sources` 最多 3 项，必须因证据充分、来源检查完成或快速预算耗尽停止；`background_research` 响应应先包含 `phase_answer_ready`，随后为 `background_goal_created`。重复同一消息序号时检查是否复用 `background_research:{conversation_id}:{message_seq}`。若回答被拒绝，核对 citations 是否都存在于冻结证据或本轮工具结果。任务 2.3 回归命令为 `python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`。
+
+对话实时事件优先订阅 `GET /api/conversations/{conversation_id}/stream?after_event_id=<last>`；SSE 中断后使用 `GET /api/conversations/{conversation_id}/events?after_event_id=<last>` 轮询，再以返回的 `last_event_id` 续传。若出现重复事件，检查客户端是否错误重置游标；若缺事件，直接核对 `agent_events` 是否先持久化。工具事件只应包含安全摘要和两类证据增量。任务 2.4 回归包括 API 契约、`tests/test_conversations.py` 与 `frontend/e2e/research-review.spec.ts`。
 
 研究完成后可按 `theme_id` 和运行 ID 在 `independent_score_snapshots` 核对三条评分。`not_assessed` 表示来源类型、历史快照或已核验 ETF 数量未达到配置门槛；不得手工补零、将旧主题强度当综合分，或跨三个维度自行加权。公式、门槛与 `independent-scores-v1` 版本均来自 `config/defaults.yaml`。
 

@@ -18,6 +18,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 研究响应路由不依赖模型自选：冻结上下文充分且无需最新数据时使用 `answer_now`；缺口不超过快速检索边界且存在直接来源时使用 `quick_retrieve`，最多去重选择 3 个来源，并在证据充分、来源全部检查或快速预算耗尽时停止；其余进入 `background_research`。后台模式把阶段性回答与缺口一起冻结在幂等 Goal payload 中，重复请求返回原回答/原 Goal。回答引用发布前取冻结 evidence ID 与本轮工具结果 ID 的并集校验，未知 ID 直接拒绝。
 
+对话实时流复用 `agent_events` 的全局递增 `event_id`，不新增临时内存队列。写入接口只接受白名单安全字段；读取按所属用户和 `conversation_id` 过滤，再以 `after_event_id` 增量返回。SSE `/stream` 与 JSON `/events` 共用同一游标，因此断线后轮询或重连不会重复已确认事件。旧 `research_runs` 快照流继续兼容，前端迁移在阶段 2 后续任务完成。
+
 单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
 
 标准化事件在 ingest 事务中同步执行 `content-quality-v1` 完整性门。门只使用冻结原文和事件字段，检测空正文、标题式摘要、导航/页脚噪声比例、事件主体和动作；结果写入 `content_quality_results`。`publishable` 是首页证据、主题快照评分和正式研究选择的共同前置条件；`needs_enrichment` 与 `rejected` 继续保留原文和治理事件，供后续幂等重抽取，不以空成功覆盖。
@@ -47,7 +49,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 v12；任务 2.1 因新增多对话与不可变消息路由提升为 `2026-08-14.v13`。`/health` 与 `/api/capabilities` 必须报告相同版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 v12；任务 2.1 因新增多对话与不可变消息路由提升为 v13；任务 2.4 因新增对话事件轮询与 SSE 路由提升为 `2026-08-14.v14`。`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
@@ -104,6 +106,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 | 健康与能力 | `GET /health`；`GET /api/capabilities`；`GET /api/connectors/health` |
 | 认证 | `GET /api/auth/session`；`POST /api/auth/login`；`POST /api/auth/logout` |
 | 研究对话 | `GET/POST /api/conversations`；`GET/POST /api/conversations/{conversation_id}/messages` |
+| 对话审计 | `GET /api/conversations/{conversation_id}/events`；`GET /api/conversations/{conversation_id}/stream` |
 | ETF 预览 | `GET /api/etf-preview`；`POST /api/etf-preview/refresh` |
 | 采集同步 | `POST /api/pipeline/run`；`POST /api/sync`；`GET/POST /api/sync-runs`；`GET /api/sync-runs/{sync_run_id}`；`POST /api/sync-runs/{sync_run_id}/cancel` |
 | 证据 | `GET /api/evidence`；`GET /api/evidence/facets`；`GET /api/evidence/{evidence_id}` |

@@ -51,7 +51,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-14.v13"
+CONTRACT_VERSION = "2026-08-14.v14"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -219,6 +219,79 @@ def list_conversation_messages(conversation_id: str, request: Request):
         return {"conversation_id": conversation_id, "messages": messages}
     finally:
         store.close()
+
+@app.get("/api/conversations/{conversation_id}/events")
+def list_conversation_events(
+    conversation_id: str, request: Request,
+    after_event_id: int = Query(default=0, ge=0),
+):
+    store = _store()
+    try:
+        try:
+            events = store.conversation_audit_events(
+                conversation_id, _request_user_id(request), after_event_id=after_event_id,
+            )
+        except KeyError:
+            raise HTTPException(404, "研究对话不存在")
+        return {
+            "conversation_id": conversation_id,
+            "events": events,
+            "last_event_id": events[-1]["event_id"] if events else after_event_id,
+        }
+    finally:
+        store.close()
+
+async def conversation_event_stream(
+    conversation_id: str, user_id: str, *, after_event_id: int = 0,
+    poll_interval: float = .5, heartbeat_seconds: float = 15,
+):
+    cursor = after_event_id
+    loop = asyncio.get_running_loop()
+    last_sent = loop.time()
+    while True:
+        store = _store()
+        try:
+            events = store.conversation_audit_events(
+                conversation_id, user_id, after_event_id=cursor,
+            )
+        except KeyError:
+            return
+        finally:
+            store.close()
+        if events:
+            for item in events:
+                cursor = int(item["event_id"])
+                last_sent = loop.time()
+                data = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                yield f"id: {cursor}\nevent: {item['kind']}\ndata: {data}\n\n"
+        elif loop.time() - last_sent >= heartbeat_seconds:
+            last_sent = loop.time()
+            yield ": keep-alive\n\n"
+        await asyncio.sleep(poll_interval)
+
+@app.get("/api/conversations/{conversation_id}/stream")
+def stream_conversation_events(
+    conversation_id: str, request: Request,
+    after_event_id: int = Query(default=0, ge=0),
+):
+    user_id = _request_user_id(request)
+    store = _store()
+    try:
+        if store.conversation(conversation_id, user_id) is None:
+            raise HTTPException(404, "研究对话不存在")
+    finally:
+        store.close()
+    return StreamingResponse(
+        conversation_event_stream(
+            conversation_id, user_id, after_event_id=after_event_id,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 @app.get("/api/connectors/health")
 def connector_health(): return [h.__dict__ for h in (c.healthcheck() for c in configured_connectors(Path("data/cache")))]
 @app.get("/api/capabilities")

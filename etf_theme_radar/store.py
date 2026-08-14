@@ -108,6 +108,10 @@ AGENT_GOAL_ACTIVE_STATUSES = (
 AGENT_GOAL_TERMINAL_STATUSES = (
     "completed", "partial", "needs_attention", "rebuild_required", "cancelled",
 )
+CONVERSATION_AUDIT_EVENT_TYPES = (
+    "action_status", "tool_summary", "evidence_delta", "answer_chunk",
+    "background_goal_created",
+)
 AGENT_GOAL_TRANSITIONS = {
     "planning": {"collecting", "extracting", "partial", "needs_attention", "cancelled"},
     "collecting": {"validating", "partial", "needs_attention", "cancelled"},
@@ -373,14 +377,81 @@ class EvidenceStore:
     def _append_agent_event(
         self, goal_id: str, event_type: str, from_status: str, to_status: str,
         created_at: str, safe_summary: str = "", details: dict | None = None,
-    ) -> None:
-        self.conn.execute(
+    ) -> int:
+        cursor = self.conn.execute(
             """INSERT INTO agent_events
             (goal_id,event_type,from_status,to_status,created_at,safe_summary,details_json)
             VALUES (?,?,?,?,?,?,?)""",
             (goal_id, event_type, from_status, to_status, created_at, safe_summary,
              json.dumps(details or {}, ensure_ascii=False)),
         )
+        return int(cursor.lastrowid)
+
+    def append_conversation_audit_event(
+        self, goal_id: str, event_type: str, created_at: str, *,
+        action: str = "", status: str = "", elapsed_ms: int = 0,
+        source_count: int = 0, tool_name: str = "", tool_status: str = "",
+        safe_summary: str = "", raw_added: int = 0, relevant_added: int = 0,
+        answer_chunk: str = "",
+    ) -> int:
+        if event_type not in CONVERSATION_AUDIT_EVENT_TYPES:
+            raise ValueError(f"Unsupported conversation audit event: {event_type}")
+        goal = self.agent_goal(goal_id)
+        if goal is None or not goal["payload"].get("conversation_id"):
+            raise KeyError(goal_id)
+        details = {
+            "action": action,
+            "status": status,
+            "elapsed_ms": max(0, int(elapsed_ms)),
+            "source_count": max(0, int(source_count)),
+            "tool_name": tool_name,
+            "tool_status": tool_status,
+            "raw_added": max(0, int(raw_added)),
+            "relevant_added": max(0, int(relevant_added)),
+            "answer_chunk": answer_chunk,
+        }
+        event_id = self._append_agent_event(
+            goal_id, event_type, goal["status"], goal["status"], created_at,
+            safe_summary=safe_summary, details=details,
+        )
+        self.conn.commit()
+        return event_id
+
+    def conversation_audit_events(
+        self, conversation_id: str, user_id: str, *, after_event_id: int = 0,
+    ) -> list[dict]:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        marks = ",".join("?" for _ in CONVERSATION_AUDIT_EVENT_TYPES)
+        rows = self.conn.execute(
+            f"""SELECT e.event_id,e.goal_id,e.event_type,e.created_at,e.safe_summary,
+            e.details_json FROM agent_events AS e
+            JOIN agent_goals AS g ON g.goal_id=e.goal_id
+            WHERE json_extract(g.payload_json,'$.conversation_id')=?
+              AND e.event_id>? AND e.event_type IN ({marks})
+            ORDER BY e.event_id""",
+            (conversation_id, after_event_id, *CONVERSATION_AUDIT_EVENT_TYPES),
+        ).fetchall()
+        result: list[dict] = []
+        for event_id, goal_id, kind, created_at, safe_summary, details_json in rows:
+            details = json.loads(details_json or "{}")
+            result.append({
+                "event_id": int(event_id),
+                "goal_id": str(goal_id),
+                "kind": str(kind),
+                "created_at": str(created_at),
+                "action": str(details.get("action") or ""),
+                "status": str(details.get("status") or ""),
+                "elapsed_ms": int(details.get("elapsed_ms") or 0),
+                "source_count": int(details.get("source_count") or 0),
+                "tool_name": str(details.get("tool_name") or ""),
+                "tool_status": str(details.get("tool_status") or ""),
+                "safe_summary": str(safe_summary or ""),
+                "raw_added": int(details.get("raw_added") or 0),
+                "relevant_added": int(details.get("relevant_added") or 0),
+                "answer_chunk": str(details.get("answer_chunk") or ""),
+            })
+        return result
 
     def create_agent_goal(
         self, *, goal_id: str, idempotency_key: str, goal_type: str, lane: str,

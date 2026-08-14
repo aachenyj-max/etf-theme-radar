@@ -37,7 +37,7 @@
 | `candidate_evidence` / `candidate_entities` / `candidate_aliases` | 保存候选与证据、实体和临时别名的可追溯关系。 |
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |
 
-任务 2.1 契约共 40 张应用表，公共契约为 `2026-08-14.v13`。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
+任务 2.4 契约仍为 40 张应用表，公共契约为 `2026-08-14.v14`。对话审计复用 `agent_events`，不创建临时流表。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
 
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
 
@@ -48,6 +48,8 @@ Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued �
 上下文构建结果包含 `layers`、`estimated_tokens`、`token_budget`、`excluded_by_permission` 与 `truncated_layers`。`excluded_by_permission` 只记录各私有层的拒绝数量，不返回被拒绝对象的 ID 或内容；`truncated_layers` 记录预算关闭时被截断的层。输入项可携带预计算 `token_count`，缺失时使用确定性 JSON 长度估算，不能由模型自行扩大预算。
 
 后台研究 Goal 使用 `goal_type=information_collection`、`lane=background` 和幂等键 `background_research:{conversation_id}:{message_seq}`。其 `payload` 冻结 `selected_theme_id`、阶段性回答和 `missing_critical_facts`；重放不得覆盖这些字段。研究响应 `citations` 只允许冻结 evidence ID 与本轮工具返回 ID。
+
+对话审计 `agent_events.event_type` 只允许 `action_status`、`tool_summary`、`evidence_delta`、`answer_chunk`、`background_goal_created`。安全详情字段为 `action`、`status`、`elapsed_ms`、`source_count`、`tool_name`、`tool_status`、`raw_added`、`relevant_added`、`answer_chunk`；工具说明只写 `safe_summary`。客户端以 `event_id` 作为 SSE/轮询共同游标。
 
 内容质量状态固定为 `publishable`、`needs_enrichment`、`rejected`。缺失字段包括 `raw_text`、`title`、`summary`、`distinct_summary`、`event_subject`、`event_action` 与 `clean_body`；对应问题码用于审计和重抽取路由。没有质量记录不等于通过。
 
