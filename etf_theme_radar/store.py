@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS agent_goals (goal_id TEXT PRIMARY KEY, idempotency_ke
 CREATE TABLE IF NOT EXISTS agent_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL, event_type TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, created_at TEXT NOT NULL, safe_summary TEXT NOT NULL, details_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS concurrency_leases (lease_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL UNIQUE, lane TEXT NOT NULL, owner TEXT NOT NULL, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS content_quality_results (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, missing_fields_json TEXT NOT NULL, issues_json TEXT NOT NULL, metrics_json TEXT NOT NULL, evaluated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS extracted_facts (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, subject TEXT NOT NULL, occurred_at TEXT NOT NULL, action TEXT NOT NULL, numbers_json TEXT NOT NULL, domain TEXT NOT NULL, location TEXT NOT NULL, industry_chain_position TEXT NOT NULL, audit_errors_json TEXT NOT NULL, extracted_at TEXT NOT NULL);
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -175,6 +176,7 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_events_goal ON agent_events(goal_id,event_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_concurrency_leases_lane ON concurrency_leases(lane,expires_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_quality_status ON content_quality_results(status,evaluated_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extracted_facts_status ON extracted_facts(status,extracted_at)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -483,6 +485,34 @@ class EvidenceStore:
             WHERE q.status='publishable' ORDER BY e.observed_at DESC"""
         ).fetchall()
         return [dict(zip(columns, row)) for row in rows]
+
+    def save_extracted_fact(self, item: dict) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO extracted_facts
+            (event_id,content_hash,parser_version,status,subject,occurred_at,action,numbers_json,
+             domain,location,industry_chain_position,audit_errors_json,extracted_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (item["event_id"], item.get("content_hash", ""), item["parser_version"], item["status"],
+             item.get("subject", ""), item.get("occurred_at", ""), item.get("action", ""),
+             json.dumps(item.get("numbers", []), ensure_ascii=False), item.get("domain", "unknown"),
+             item.get("location", ""), item.get("industry_chain_position", "unknown"),
+             json.dumps(item.get("audit_errors", []), ensure_ascii=False), item["extracted_at"]),
+        )
+
+    def extracted_fact(self, event_id: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT event_id,content_hash,parser_version,status,subject,occurred_at,action,
+            numbers_json,domain,location,industry_chain_position,audit_errors_json,extracted_at
+            FROM extracted_facts WHERE event_id=?""",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = ("event_id", "content_hash", "parser_version", "status", "subject", "occurred_at", "action", "numbers", "domain", "location", "industry_chain_position", "audit_errors", "extracted_at")
+        item = dict(zip(keys, row))
+        item["numbers"] = json.loads(item["numbers"])
+        item["audit_errors"] = json.loads(item["audit_errors"])
+        return item
 
     def replace_event(self, event: NormalizedEvent) -> None:
         self.save_event(event)

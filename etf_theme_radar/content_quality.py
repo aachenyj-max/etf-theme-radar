@@ -8,18 +8,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from .models import utcnow
+from .fact_extraction import find_action
 
 
 PARSER_VERSION = "content-quality-v1"
 _BOILERPLATE_TAGS = {"nav", "footer", "header", "aside"}
 _IGNORED_TAGS = {"script", "style", "noscript"}
-_ACTION_PATTERN = re.compile(
-    r"\b(?:announc(?:e|ed|es|ing)|publish(?:ed|es|ing)?|launch(?:ed|es|ing)?|"
-    r"expand(?:ed|s|ing)?|deploy(?:ed|s|ing)?|disclos(?:e|ed|es|ing)|"
-    r"report(?:ed|s|ing)?|describe(?:d|s|ing)?|file(?:d|s|ing)?|hire(?:d|s|ing)?|acquir(?:e|ed|es|ing))\b|"
-    r"发布|宣布|披露|推出|扩建|部署|招聘|收购|提交|发表|新增|建设",
-    re.IGNORECASE,
-)
 
 
 def _quality_defaults() -> dict[str, float]:
@@ -157,7 +151,7 @@ def evaluate_content_quality(
     if not any(subjects):
         missing.append("event_subject")
         issues.append("missing_event_subject")
-    if not _ACTION_PATTERN.search(f"{summary} {visible}"):
+    if not find_action(f"{summary} {visible}"):
         missing.append("event_action")
         issues.append("missing_event_action")
     maximum_ratio = defaults.get("maximum_boilerplate_ratio", 0.25)

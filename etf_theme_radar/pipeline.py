@@ -4,6 +4,7 @@ from .connectors import SourceConnector
 from .store import EvidenceStore
 from .governance import classify
 from .content_quality import evaluate_content_quality
+from .fact_extraction import extract_facts
 def ingest(connector: SourceConnector, store: EvidenceStore, since: date, until: date) -> dict:
     health=connector.healthcheck(); store.save_health(health); store.commit()
     result={"source":connector.source_name,"status":health.status,"items":0,"events":0,"errors":[]}
@@ -20,6 +21,7 @@ def ingest(connector: SourceConnector, store: EvidenceStore, since: date, until:
                     store.save_content_quality_result(
                         evaluate_content_quality(governed.__dict__, raw.text).as_dict()
                     )
+                    store.save_extracted_fact(extract_facts(governed.__dict__, raw.text).as_dict())
                 store.commit()
                 result["items"]+=1; result["events"]+=len(events)
             except Exception as exc:
