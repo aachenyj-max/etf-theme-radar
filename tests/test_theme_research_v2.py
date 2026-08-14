@@ -19,6 +19,16 @@ def _event(event_id: str, *, status="relevant", assignment="assigned", publisher
     )
 
 
+def _save_publishable(store: EvidenceStore, event: NormalizedEvent) -> None:
+    store.save_event(event)
+    store.save_content_quality_result({
+        "event_id": event.event_id, "content_hash": event.raw_content_hash,
+        "parser_version": "content-quality-v1", "status": "publishable",
+        "missing_fields": [], "issues": [], "metrics": {},
+        "evaluated_at": "2026-07-22T00:00:00+00:00",
+    })
+
+
 def test_classification_reasons_round_trip_as_array(tmp_path: Path):
     store = EvidenceStore(tmp_path / "events.db"); store.save_event(_event("one")); store.commit()
     reasons = json.loads(store.events()[0]["classification_reasons"])
@@ -28,7 +38,7 @@ def test_classification_reasons_round_trip_as_array(tmp_path: Path):
 
 def test_irrelevant_and_uncertain_are_excluded_and_no_history_claim(tmp_path: Path):
     store = EvidenceStore(tmp_path / "events.db")
-    for item in (_event("good"), _event("bad", status="irrelevant", assignment="no_theme_match"), _event("review", status="uncertain", assignment="needs_review")): store.save_event(item)
+    for item in (_event("good"), _event("bad", status="irrelevant", assignment="no_theme_match"), _event("review", status="uncertain", assignment="needs_review")): _save_publishable(store, item)
     store.commit(); result = run_theme_research(store, "ai-infrastructure", tmp_path / "report")
     assert result["selected"] == 1 and result["status"] == "WATCH"
     assert result["audit"]["no_trend_claim"] is True
@@ -39,7 +49,7 @@ def test_irrelevant_and_uncertain_are_excluded_and_no_history_claim(tmp_path: Pa
 
 def test_single_source_and_missing_counter_search_cannot_deep_research(tmp_path: Path):
     store = EvidenceStore(tmp_path / "events.db")
-    for number in range(5): store.save_event(_event(str(number), publisher="same.example"))
+    for number in range(5): _save_publishable(store, _event(str(number), publisher="same.example"))
     store.commit(); result = run_theme_research(store, "ai-infrastructure", tmp_path / "report")
     assert result["status"] != "DEEP_RESEARCH"
     appendix = json.loads((tmp_path / "report/evidence-appendix.json").read_text(encoding="utf-8"))
@@ -53,7 +63,7 @@ def test_key_evidence_cards_have_urls_and_do_not_repeat_publishers(tmp_path: Pat
         item = _event(str(number), publisher=publisher)
         if number == 0:
             item = item.__class__(**{**item.__dict__, "source_type": "jobs"})
-        store.save_event(item)
+        _save_publishable(store, item)
     store.commit(); result = run_theme_research(store, "ai-infrastructure", tmp_path / "report")
     cards = result["brief"]["key_evidence"]
     assert len(cards) == 5
@@ -66,7 +76,7 @@ def test_key_evidence_cards_have_urls_and_do_not_repeat_publishers(tmp_path: Pat
 def test_report_has_structured_scenarios_scorecard_and_explained_gaps(tmp_path: Path):
     store = EvidenceStore(tmp_path / "structured.db")
     for number, publisher in enumerate(("a.example", "b.example", "c.example")):
-        store.save_event(_event(str(number), publisher=publisher))
+        _save_publishable(store, _event(str(number), publisher=publisher))
     store.commit()
     result = run_theme_research(store, "ai-infrastructure", tmp_path / "report")
     sections = result["report_sections"]

@@ -50,7 +50,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-14.v10"
+CONTRACT_VERSION = "2026-08-14.v11"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -476,7 +476,7 @@ def review_entity(entity_id:str, request:EntityReviewRequest):
 def dashboard():
     store=_store()
     try:
-        events=store.events(); runs=store.research_runs(); reports=store.report_assets()
+        events=store.publishable_events(); runs=store.research_runs(); reports=store.report_assets()
     finally: store.close()
     governed=[item for item in events if item.get("relevance_status")=="relevant" and item.get("theme_assignment_status")=="assigned"]
     theme_items=_theme_payloads()

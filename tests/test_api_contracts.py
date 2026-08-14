@@ -32,7 +32,7 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-14.v10"
+        assert payload["service"]["contract_version"] == "2026-08-14.v11"
         assert payload["llm"]["concurrency"]["lane_reservations"] == {
             "interactive": 10, "background": 2,
         }
@@ -149,9 +149,13 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-14.v10"
+    assert snapshot["contract_version"] == "2026-08-14.v11"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
+    assert "content_quality_results" in snapshot["database_tables"]
+    assert snapshot["status_enums"]["content_quality"] == [
+        "publishable", "needs_enrichment", "rejected",
+    ]
     assert snapshot["status_enums"]["agent_goal"] == {
         "active": [
             "planning", "collecting", "extracting", "validating", "replanning",

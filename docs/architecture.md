@@ -12,7 +12,9 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。queued Goal 首次领取进入 planning，活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt；heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
 
-单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露，契约版本为 `2026-08-14.v10`。
+单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
+
+标准化事件在 ingest 事务中同步执行 `content-quality-v1` 完整性门。门只使用冻结原文和事件字段，检测空正文、标题式摘要、导航/页脚噪声比例、事件主体和动作；结果写入 `content_quality_results`。`publishable` 是首页证据、主题快照评分和正式研究选择的共同前置条件；`needs_enrichment` 与 `rejected` 继续保留原文和治理事件，供后续幂等重抽取，不以空成功覆盖。
 
 普通主题研究由 SQLite 原子队列限制为一个执行槽，并维护按 `queue_position` 排序的 FIFO 多任务等待队列。`awaiting_*`、`returned` 与 `blocked_configuration` 属于独立人工处理状态，不占执行槽；执行项进入人工处理或终态后，在同一写事务中提升最早等待项。主题审核通过和退回任务重跑先追加到等待队列，只有排到队首且执行槽空闲时才恢复对应阶段。Worker 重启时会先提升遗留等待项，且不会并行领取两个普通研究任务。
 
@@ -35,7 +37,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。阶段 1 / 任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency`，当前版本提升为 `2026-08-14.v10`；`/health` 与 `/api/capabilities` 必须报告相同版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化，当前版本为 `2026-08-14.v11`。`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
@@ -43,6 +45,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 当前应用表共 31 张；SQLite 内部的 `sqlite_*` 表不计入契约：
 
 这是阶段 0 的冻结表面。任务 1.1 当前应用表增加至 34 张，新增 `agent_goals`、`agent_events`、`concurrency_leases`；原 31 张表保持兼容。
+
+任务 1.2 当前应用表增加至 35 张，新增 `content_quality_results`；原表仍保持兼容。
 
 | 领域 | 表 |
 |---|---|

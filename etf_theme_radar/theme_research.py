@@ -475,19 +475,20 @@ def run_theme_research(
 ) -> dict:
     run_id = run_id or str(uuid4())
     out = Path(output); out.mkdir(parents=True, exist_ok=True); all_events = store.events()
+    publishable_ids = {item["event_id"] for item in store.publishable_events()}
     keys = {theme.casefold(), *((item or "").casefold() for item in (aliases or []))}
     def belongs(e: dict) -> bool:
         assigned = {str(e.get("primary_theme") or "").casefold(), *(str(item).casefold() for item in json.loads(e.get("secondary_themes") or "[]"))}
         searchable = f"{e.get('title','')} {e.get('summary','')} {' '.join(json.loads(e.get('matched_terms') or '[]'))}".casefold()
         return bool(keys & assigned) or any(len(key) >= 3 and key in searchable for key in keys)
-    selected = [e for e in all_events if e.get("relevance_status")=="relevant" and e.get("theme_assignment_status")=="assigned" and belongs(e) and float(e.get("classification_confidence") or 0)>=.65 and e.get("source_url") and e.get("publisher")]
+    selected = [e for e in all_events if e["event_id"] in publishable_ids and e.get("relevance_status")=="relevant" and e.get("theme_assignment_status")=="assigned" and belongs(e) and float(e.get("classification_confidence") or 0)>=.65 and e.get("source_url") and e.get("publisher")]
     # Deduplicate job mirrors and same publisher/title, retaining strongest source quality.
     unique = {}
     for e in selected:
         key = e.get("duplicate_job_cluster") or (e["publisher_domain"], e["title"].lower())
         if key not in unique or e["source_quality"] > unique[key]["source_quality"]: unique[key] = e
     selected = sorted(unique.values(), key=lambda e: (e["source_quality"], e["classification_confidence"]), reverse=True)
-    excluded = [{"evidence_id": e["event_id"], "reason": "不满足相关性、主题分配、置信度或可审计来源条件"} for e in all_events if e not in selected]
+    excluded = [{"evidence_id": e["event_id"], "reason": "信息完整性门未通过" if e["event_id"] not in publishable_ids else "不满足相关性、主题分配、置信度或可审计来源条件"} for e in all_events if e not in selected]
     support = [_evidence(e) for e in selected]; types = {e["origin_source_type"] for e in selected}; companies = {e.get("company_id") or e["publisher"] for e in selected}; first = [e for e in selected if e["primary_or_secondary"]=="primary"]
     hypothesis = {"theme_id": theme, "theme_name": theme_name or theme, "hypothesis": "现有高置信度证据显示该主题存在值得持续核验的技术与产业活动。", "economic_mechanism": ["技术部署可能带动相关基础设施、软硬件与服务需求"], "potential_beneficiaries": [], "key_catalysts": ["独立一级来源的持续新增证据"], "disconfirming_conditions": ["证据仅来自单一公司、无法验证商业采用或缺少可投资公司池"], "current_stage": "uncertain", "evidence_ids": [e["evidence_id"] for e in support]}
     available = {"evidence_quality": sum(e["source_quality"] for e in selected)/len(selected) if selected else 0, "evidence_diversity": min(1, len(types)/3), "company_breadth": min(1, len(companies)/3), "research_activity": min(1, sum(e["origin_source_type"]=="academic" for e in selected)/3), "hiring_activity": min(1, sum(e["source_type"]=="jobs" and e.get("technical_or_nontechnical")=="technical" for e in selected)/10), "commercial_adoption": 0, "counter_evidence": 0}

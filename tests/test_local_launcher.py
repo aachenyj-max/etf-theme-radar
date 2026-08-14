@@ -27,7 +27,7 @@ def test_launcher_restores_next_build_directory_environment() -> None:
 
 def test_launcher_reuses_only_matching_contract_with_worker_heartbeat() -> None:
     launcher = (PROJECT_ROOT / "tools" / "start_local.ps1").read_text(encoding="utf-8")
-    assert '$contractVersion = "2026-08-14.v10"' in launcher
+    assert '$contractVersion = "2026-08-14.v11"' in launcher
     assert "api/capabilities" in launcher
     assert 'service.id -eq $serviceId' in launcher
     assert 'service.contract_version -eq $contractVersion' in launcher

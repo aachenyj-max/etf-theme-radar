@@ -3,6 +3,7 @@ from datetime import date
 from .connectors import SourceConnector
 from .store import EvidenceStore
 from .governance import classify
+from .content_quality import evaluate_content_quality
 def ingest(connector: SourceConnector, store: EvidenceStore, since: date, until: date) -> dict:
     health=connector.healthcheck(); store.save_health(health); store.commit()
     result={"source":connector.source_name,"status":health.status,"items":0,"events":0,"errors":[]}
@@ -13,7 +14,12 @@ def ingest(connector: SourceConnector, store: EvidenceStore, since: date, until:
         for item_id in connector.discover(since,until):
             try:
                 raw=connector.fetch(item_id); store.save_raw(raw); events=connector.normalize(raw)
-                for event in events: store.save_event(classify(event, raw.text))
+                for event in events:
+                    governed = classify(event, raw.text)
+                    store.save_event(governed)
+                    store.save_content_quality_result(
+                        evaluate_content_quality(governed.__dict__, raw.text).as_dict()
+                    )
                 store.commit()
                 result["items"]+=1; result["events"]+=len(events)
             except Exception as exc:

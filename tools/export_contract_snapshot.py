@@ -92,6 +92,7 @@ def build_snapshot() -> dict[str, object]:
                 "active": list(AGENT_GOAL_ACTIVE_STATUSES),
                 "terminal": list(AGENT_GOAL_TERMINAL_STATUSES),
             },
+            "content_quality": ["publishable", "needs_enrichment", "rejected"],
             "theme_candidate": [
                 "signal", "validating", "awaiting_confirmation",
                 "confirmed", "merged", "rejected",

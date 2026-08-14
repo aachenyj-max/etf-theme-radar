@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS source_watermarks (source_name TEXT PRIMARY KEY, wate
 CREATE TABLE IF NOT EXISTS agent_goals (goal_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, goal_type TEXT NOT NULL, lane TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, priority INTEGER DEFAULT 0, payload_json TEXT NOT NULL, result_json TEXT NOT NULL, error TEXT NOT NULL, cancel_requested INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deadline_at TEXT, lease_owner TEXT NOT NULL, lease_expires_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, attempt INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS agent_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL, event_type TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, created_at TEXT NOT NULL, safe_summary TEXT NOT NULL, details_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS concurrency_leases (lease_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL UNIQUE, lane TEXT NOT NULL, owner TEXT NOT NULL, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS content_quality_results (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, missing_fields_json TEXT NOT NULL, issues_json TEXT NOT NULL, metrics_json TEXT NOT NULL, evaluated_at TEXT NOT NULL);
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -173,6 +174,7 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_goals_lease ON agent_goals(status,lease_expires_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_events_goal ON agent_events(goal_id,event_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_concurrency_leases_lane ON concurrency_leases(lane,expires_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_quality_status ON content_quality_results(status,evaluated_at)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -447,6 +449,40 @@ class EvidenceStore:
             raise
     def events(self) -> list[dict]:
         cols=[x[0] for x in self.conn.execute("SELECT * FROM normalized_events").description]; return [dict(zip(cols,row)) for row in self.conn.execute("SELECT * FROM normalized_events ORDER BY observed_at DESC")]
+
+    def save_content_quality_result(self, item: dict) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO content_quality_results
+            (event_id,content_hash,parser_version,status,missing_fields_json,issues_json,metrics_json,evaluated_at)
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (item["event_id"], item.get("content_hash", ""), item["parser_version"], item["status"],
+             json.dumps(item.get("missing_fields", []), ensure_ascii=False),
+             json.dumps(item.get("issues", []), ensure_ascii=False),
+             json.dumps(item.get("metrics", {}), ensure_ascii=False), item["evaluated_at"]),
+        )
+
+    def content_quality_result(self, event_id: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT event_id,content_hash,parser_version,status,missing_fields_json,
+            issues_json,metrics_json,evaluated_at FROM content_quality_results WHERE event_id=?""",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = ("event_id", "content_hash", "parser_version", "status", "missing_fields", "issues", "metrics", "evaluated_at")
+        item = dict(zip(keys, row))
+        for key in ("missing_fields", "issues", "metrics"):
+            item[key] = json.loads(item[key])
+        return item
+
+    def publishable_events(self) -> list[dict]:
+        columns = [item[0] for item in self.conn.execute("SELECT * FROM normalized_events LIMIT 0").description]
+        rows = self.conn.execute(
+            """SELECT e.* FROM normalized_events e
+            JOIN content_quality_results q ON q.event_id=e.event_id
+            WHERE q.status='publishable' ORDER BY e.observed_at DESC"""
+        ).fetchall()
+        return [dict(zip(columns, row)) for row in rows]
 
     def replace_event(self, event: NormalizedEvent) -> None:
         self.save_event(event)

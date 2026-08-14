@@ -35,6 +35,8 @@ agent_concurrency:
   background_reserved: 2
   minimum_total: 2
   cooldown_seconds: 30
+content_quality:
+  maximum_boilerplate_ratio: 0.25
 etf_market:
   minimum_verified_etfs: 2
   max_products_per_snapshot: 6

@@ -65,7 +65,7 @@ def refresh_theme_snapshots(store: EvidenceStore, as_of_date: str | None = None)
     snapshot_date = as_of_date or date.today().isoformat()
     now = utcnow()
     events = [
-        item for item in store.events()
+        item for item in store.publishable_events()
         if item.get("relevance_status") == "relevant" and item.get("theme_assignment_status") == "assigned"
     ]
     definitions = {item["theme_id"]: item for item in store.theme_definitions()}
