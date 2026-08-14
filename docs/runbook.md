@@ -56,6 +56,8 @@ Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`ag
 
 三响应模式诊断：`answer_now` 出现工具调用表示路由或调用方越界；`quick_retrieve` 的 `retrieval_sources` 最多 3 项，必须因证据充分、来源检查完成或快速预算耗尽停止；`background_research` 响应应先包含 `phase_answer_ready`，随后为 `background_goal_created`。重复同一消息序号时检查是否复用 `background_research:{conversation_id}:{message_seq}`。若回答被拒绝，核对 citations 是否都存在于冻结证据或本轮工具结果。任务 2.3 回归命令为 `python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`。
 
+总结任务长期 queued 时，先检查其 `payload_json.not_before_at`；防抖窗口内不应被 Worker 领取，后续回答会复用同一 queued Goal 并更新 `target_message_seq`。进入 `rebuild_required` 时按错误原因检查消息是否连续、冻结消息是否仍与数据库一致、checkpoint 的 evidence ID 是否位于输入白名单，以及 `previous_version_id` 是否等于最新总结版本。不得手工补写总结或修改不可变检查点。记忆编辑和纠正必须产生新 `memory_id` 与 `supersedes` 关系；删除使用 `deleted` 软状态。任务 2.5 回归命令为 `python -m pytest tests/test_summary_agent.py tests/test_memory.py -q`，预期应用表为 44，公共契约仍为 `2026-08-14.v14`。
+
 对话实时事件优先订阅 `GET /api/conversations/{conversation_id}/stream?after_event_id=<last>`；SSE 中断后使用 `GET /api/conversations/{conversation_id}/events?after_event_id=<last>` 轮询，再以返回的 `last_event_id` 续传。若出现重复事件，检查客户端是否错误重置游标；若缺事件，直接核对 `agent_events` 是否先持久化。工具事件只应包含安全摘要和两类证据增量。任务 2.4 回归包括 API 契约、`tests/test_conversations.py` 与 `frontend/e2e/research-review.spec.ts`。
 
 研究完成后可按 `theme_id` 和运行 ID 在 `independent_score_snapshots` 核对三条评分。`not_assessed` 表示来源类型、历史快照或已核验 ETF 数量未达到配置门槛；不得手工补零、将旧主题强度当综合分，或跨三个维度自行加权。公式、门槛与 `independent-scores-v1` 版本均来自 `config/defaults.yaml`。

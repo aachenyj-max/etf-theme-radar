@@ -20,6 +20,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 对话实时流复用 `agent_events` 的全局递增 `event_id`，不新增临时内存队列。写入接口只接受白名单安全字段；读取按所属用户和 `conversation_id` 过滤，再以 `after_event_id` 增量返回。SSE `/stream` 与 JSON `/events` 共用同一游标，因此断线后轮询或重连不会重复已确认事件。旧 `research_runs` 快照流继续兼容，前端迁移在阶段 2 后续任务完成。
 
+总结任务复用后台 lane 的持久 `agent_goals`。每次回答把 `not_before_at` 推迟到最新防抖时间并合并 `target_message_seq`；Worker 到期后首次领取直接进入 `summarizing`。输出写入只追加的 `conversation_summary_versions` 与 `context_checkpoints` 前，必须验证数据库中的不可变消息副本、连续覆盖、source message、evidence ID 和上一版本。失败只返回 `rebuild_required`，不追加貌似完整的版本。`memories` 保存用户可控状态和版本，编辑/纠正创建新记录并以 `memory_relations.supersedes` 指向旧记录；正式研究资产不在该服务的写集合内。
+
 单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
 
 标准化事件在 ingest 事务中同步执行 `content-quality-v1` 完整性门。门只使用冻结原文和事件字段，检测空正文、标题式摘要、导航/页脚噪声比例、事件主体和动作；结果写入 `content_quality_results`。`publishable` 是首页证据、主题快照评分和正式研究选择的共同前置条件；`needs_enrichment` 与 `rejected` 继续保留原文和治理事件，供后续幂等重抽取，不以空成功覆盖。
@@ -67,6 +69,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 任务 1.6 当前应用表增加至 38 张，新增 `independent_score_snapshots`；研究结果新增三个独立评分维度，契约版本提升为 `2026-08-14.v12`。三个维度仅共享主题和运行范围，不计算跨维度综合分。
 
 任务 2.1 当前应用表增加至 40 张，新增 `conversations` 与 `conversation_messages`；公开契约提升为 `2026-08-14.v13`。旧 `research_runs` 单执行槽继续用于普通主题研究，新的 `research_turn` 使用交互 lane 并按 `conversation_id` 串行。
+
+任务 2.5 当前应用表增加至 44 张，新增 `conversation_summary_versions`、`context_checkpoints`、`memories` 与 `memory_relations`。这些是内部持久运行时资产，公共契约保持 `2026-08-14.v14`。
 
 阶段 1 的治理顺序固定为：持久 Goal 领取与 lease 隔离 → 原文完整性评估 → 逐条事实抽取审计 → 研究/刷新边界 → 独立评分持久化。历史回填复用同一质量与抽取函数，并以内容哈希、解析版本和恢复点保证幂等；任何下游报告都不能把未通过质量门、不可比 ETF 字段或 `not_assessed` 维度转换成肯定结论。
 

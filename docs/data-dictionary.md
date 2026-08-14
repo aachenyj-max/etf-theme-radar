@@ -36,8 +36,12 @@
 | `theme_candidates` | 保存候选名称、状态、稳定签名、发现窗口、门槛指标和结构化视图。 |
 | `candidate_evidence` / `candidate_entities` / `candidate_aliases` | 保存候选与证据、实体和临时别名的可追溯关系。 |
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |
+| `conversation_summary_versions` | 对话滚动总结的不可变版本链；保存前版 ID、连续消息范围、完整结构化输出和来源消息 ID。 |
+| `context_checkpoints` | 与一个总结版本一一绑定的不可变压缩检查点；范围必须与已校验的连续消息覆盖一致。 |
+| `memories` | 用户长期记忆版本；保存来源消息、类别、个人/主题作用域、置信度、固定状态与 active/disabled/deleted/superseded 状态。 |
+| `memory_relations` | 记忆版本关系；当前只接受 `supersedes`，新版本指向被替代旧版本。 |
 
-任务 2.4 契约仍为 40 张应用表，公共契约为 `2026-08-14.v14`。对话审计复用 `agent_events`，不创建临时流表。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
+任务 2.5 为 44 张应用表，公共契约仍为 `2026-08-14.v14`。对话审计复用 `agent_events`，不创建临时流表；总结与检查点只追加，记忆删除为可审计软删除。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
 
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
 

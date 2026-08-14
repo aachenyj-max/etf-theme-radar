@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS conversations (conversation_id TEXT PRIMARY KEY, user
 CREATE TABLE IF NOT EXISTS conversation_messages (message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, idempotency_key TEXT NOT NULL, goal_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, UNIQUE(conversation_id,message_seq), UNIQUE(conversation_id,idempotency_key));
 CREATE TRIGGER IF NOT EXISTS conversation_messages_no_update BEFORE UPDATE ON conversation_messages BEGIN SELECT RAISE(ABORT, 'conversation_messages are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS conversation_messages_no_delete BEFORE DELETE ON conversation_messages BEGIN SELECT RAISE(ABORT, 'conversation_messages are immutable'); END;
+CREATE TABLE IF NOT EXISTS conversation_summary_versions (summary_version_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, version INTEGER NOT NULL, previous_version_id TEXT, status TEXT NOT NULL, covered_from_seq INTEGER NOT NULL, covered_to_seq INTEGER NOT NULL, summary_json TEXT NOT NULL, source_message_ids_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(conversation_id,version));
+CREATE TABLE IF NOT EXISTS context_checkpoints (checkpoint_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, summary_version_id TEXT NOT NULL UNIQUE, covered_from_seq INTEGER NOT NULL, covered_to_seq INTEGER NOT NULL, checkpoint_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memories (memory_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, theme_id TEXT NOT NULL, category TEXT NOT NULL, scope TEXT NOT NULL, content TEXT NOT NULL, confidence REAL NOT NULL, status TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL, source_message_ids_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memory_relations (from_memory_id TEXT NOT NULL, to_memory_id TEXT NOT NULL, relation_type TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(from_memory_id,to_memory_id,relation_type));
+CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_update BEFORE UPDATE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_delete BEFORE DELETE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS context_checkpoints_no_update BEFORE UPDATE ON context_checkpoints BEGIN SELECT RAISE(ABORT, 'context checkpoints are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS context_checkpoints_no_delete BEFORE DELETE ON context_checkpoints BEGIN SELECT RAISE(ABORT, 'context checkpoints are immutable'); END;
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -190,6 +198,10 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extraction_exceptions_status ON extraction_exceptions(status,last_failed_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id,updated_at DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_messages_order ON conversation_messages(conversation_id,message_seq)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_summary_versions ON conversation_summary_versions(conversation_id,version DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_context_checkpoints_conversation ON context_checkpoints(conversation_id,covered_to_seq DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(user_id,status,pinned DESC,updated_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_relations_target ON memory_relations(to_memory_id,relation_type)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -349,6 +361,254 @@ class EvidenceStore:
         except Exception:
             self.conn.rollback()
             raise
+
+    def latest_conversation_summary(self, conversation_id: str, user_id: str) -> dict | None:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        row = self.conn.execute(
+            """SELECT summary_version_id,conversation_id,version,previous_version_id,status,
+            covered_from_seq,covered_to_seq,summary_json,source_message_ids_json,created_at
+            FROM conversation_summary_versions WHERE conversation_id=?
+            ORDER BY version DESC LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+        return self._conversation_summary_from_row(row)
+
+    @staticmethod
+    def _conversation_summary_from_row(row: tuple | None) -> dict | None:
+        if row is None:
+            return None
+        keys = (
+            "summary_version_id", "conversation_id", "version", "previous_version_id",
+            "status", "covered_from_seq", "covered_to_seq", "summary", "source_message_ids",
+            "created_at",
+        )
+        item = dict(zip(keys, row))
+        item["summary"] = json.loads(item["summary"] or "{}")
+        item["source_message_ids"] = json.loads(item["source_message_ids"] or "[]")
+        return item
+
+    def conversation_summary_versions(self, conversation_id: str, user_id: str) -> list[dict]:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        rows = self.conn.execute(
+            """SELECT summary_version_id,conversation_id,version,previous_version_id,status,
+            covered_from_seq,covered_to_seq,summary_json,source_message_ids_json,created_at
+            FROM conversation_summary_versions WHERE conversation_id=? ORDER BY version""",
+            (conversation_id,),
+        ).fetchall()
+        return [self._conversation_summary_from_row(row) for row in rows if row is not None]
+
+    def save_conversation_summary(
+        self, *, conversation_id: str, user_id: str, output: dict, created_at: str,
+    ) -> dict:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        latest = self.latest_conversation_summary(conversation_id, user_id)
+        version = int(latest["version"] if latest else 0) + 1
+        summary_version_id = f"summary:{conversation_id}:{version}"
+        checkpoint_id = f"checkpoint:{conversation_id}:{version}"
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                """INSERT INTO conversation_summary_versions
+                (summary_version_id,conversation_id,version,previous_version_id,status,
+                 covered_from_seq,covered_to_seq,summary_json,source_message_ids_json,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (summary_version_id, conversation_id, version, output.get("previous_version_id"),
+                 "completed", int(output["covered_from_seq"]), int(output["covered_to_seq"]),
+                 json.dumps(output, ensure_ascii=False),
+                 json.dumps(output["source_message_ids"], ensure_ascii=False), created_at),
+            )
+            self.conn.execute(
+                """INSERT INTO context_checkpoints
+                (checkpoint_id,conversation_id,summary_version_id,covered_from_seq,
+                 covered_to_seq,checkpoint_json,created_at) VALUES (?,?,?,?,?,?,?)""",
+                (checkpoint_id, conversation_id, summary_version_id,
+                 int(output["covered_from_seq"]), int(output["covered_to_seq"]),
+                 json.dumps(output["compression_checkpoint"], ensure_ascii=False), created_at),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        item = self.latest_conversation_summary(conversation_id, user_id)
+        assert item is not None
+        return item
+
+    def latest_conversation_checkpoint(self, conversation_id: str, user_id: str) -> dict | None:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        row = self.conn.execute(
+            """SELECT checkpoint_id,conversation_id,summary_version_id,covered_from_seq,
+            covered_to_seq,checkpoint_json,created_at FROM context_checkpoints
+            WHERE conversation_id=? ORDER BY covered_to_seq DESC,created_at DESC LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = ("checkpoint_id", "conversation_id", "summary_version_id", "covered_from_seq", "covered_to_seq", "checkpoint", "created_at")
+        item = dict(zip(keys, row))
+        item["checkpoint"] = json.loads(item["checkpoint"] or "{}")
+        return item
+
+    def schedule_conversation_summary(
+        self, *, conversation_id: str, user_id: str, message_seq: int, goal_id: str,
+        now: str, not_before_at: str,
+    ) -> dict:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        payload = {
+            "conversation_id": conversation_id,
+            "target_message_seq": int(message_seq),
+            "not_before_at": not_before_at,
+        }
+        row = self.conn.execute(
+            """SELECT goal_id FROM agent_goals WHERE goal_type='conversation_summary'
+            AND status='queued' AND json_extract(payload_json,'$.conversation_id')=?
+            ORDER BY created_at DESC LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+        if row is not None:
+            existing_goal_id = str(row[0])
+            self.conn.execute(
+                """UPDATE agent_goals SET payload_json=?,updated_at=? WHERE goal_id=?""",
+                (json.dumps(payload, ensure_ascii=False), now, existing_goal_id),
+            )
+            self._append_agent_event(
+                existing_goal_id, "debounced", "queued", "queued", now,
+                safe_summary="总结任务已合并到最新回答",
+                details={"target_message_seq": int(message_seq)},
+            )
+            self.conn.commit()
+            item = self.agent_goal(existing_goal_id)
+            assert item is not None
+            item["debounced"] = True
+            return item
+        item = self.create_agent_goal(
+            goal_id=goal_id, idempotency_key=f"summary:{conversation_id}:{message_seq}",
+            goal_type="conversation_summary", lane="background", payload=payload,
+            created_at=now,
+        )
+        item["debounced"] = False
+        return item
+
+    @staticmethod
+    def _memory_from_row(row: tuple | None) -> dict | None:
+        if row is None:
+            return None
+        keys = (
+            "memory_id", "user_id", "conversation_id", "theme_id", "category", "scope",
+            "content", "confidence", "status", "pinned", "version",
+            "source_message_ids", "created_at", "updated_at",
+        )
+        item = dict(zip(keys, row))
+        item["confidence"] = float(item["confidence"])
+        item["pinned"] = bool(item["pinned"])
+        item["source_message_ids"] = json.loads(item["source_message_ids"] or "[]")
+        return item
+
+    def memory(self, memory_id: str, user_id: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT memory_id,user_id,conversation_id,theme_id,category,scope,content,
+            confidence,status,pinned,version,source_message_ids_json,created_at,updated_at
+            FROM memories WHERE memory_id=? AND user_id=?""",
+            (memory_id, user_id),
+        ).fetchone()
+        return self._memory_from_row(row)
+
+    def save_memory(
+        self, *, memory_id: str, user_id: str, conversation_id: str, category: str,
+        scope: str, content: str, confidence: float, source_message_ids: list[str],
+        created_at: str, version: int = 1, pinned: bool = False,
+    ) -> dict:
+        conversation = self.conversation(conversation_id, user_id)
+        if conversation is None:
+            raise KeyError(conversation_id)
+        self.conn.execute(
+            """INSERT INTO memories
+            (memory_id,user_id,conversation_id,theme_id,category,scope,content,confidence,
+             status,pinned,version,source_message_ids_json,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (memory_id, user_id, conversation_id, conversation["selected_theme_id"], category,
+             scope, content, float(confidence), "active", int(pinned), int(version),
+             json.dumps(source_message_ids, ensure_ascii=False), created_at, created_at),
+        )
+        self.conn.commit()
+        item = self.memory(memory_id, user_id)
+        assert item is not None
+        return item
+
+    def update_memory_state(
+        self, memory_id: str, user_id: str, *, updated_at: str,
+        status: str | None = None, pinned: bool | None = None,
+    ) -> dict:
+        item = self.memory(memory_id, user_id)
+        if item is None:
+            raise KeyError(memory_id)
+        assignments = ["updated_at=?"]
+        values: list[object] = [updated_at]
+        if status is not None:
+            assignments.append("status=?")
+            values.append(status)
+        if pinned is not None:
+            assignments.append("pinned=?")
+            values.append(int(pinned))
+        values.extend([memory_id, user_id])
+        self.conn.execute(
+            f"UPDATE memories SET {','.join(assignments)} WHERE memory_id=? AND user_id=?",
+            tuple(values),
+        )
+        self.conn.commit()
+        updated = self.memory(memory_id, user_id)
+        assert updated is not None
+        return updated
+
+    def supersede_memory(
+        self, *, old_memory_id: str, user_id: str, replacement_memory_id: str,
+        content: str, source_message_ids: list[str], created_at: str,
+    ) -> dict:
+        old = self.memory(old_memory_id, user_id)
+        if old is None:
+            raise KeyError(old_memory_id)
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                """INSERT INTO memories
+                (memory_id,user_id,conversation_id,theme_id,category,scope,content,confidence,
+                 status,pinned,version,source_message_ids_json,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (replacement_memory_id, user_id, old["conversation_id"], old["theme_id"],
+                 old["category"], old["scope"], content, old["confidence"], "active",
+                 int(old["pinned"]), int(old["version"]) + 1,
+                 json.dumps(source_message_ids, ensure_ascii=False), created_at, created_at),
+            )
+            self.conn.execute(
+                "UPDATE memories SET status='superseded',updated_at=? WHERE memory_id=? AND user_id=?",
+                (created_at, old_memory_id, user_id),
+            )
+            self.conn.execute(
+                """INSERT INTO memory_relations
+                (from_memory_id,to_memory_id,relation_type,created_at) VALUES (?,?,?,?)""",
+                (replacement_memory_id, old_memory_id, "supersedes", created_at),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        item = self.memory(replacement_memory_id, user_id)
+        assert item is not None
+        return item
+
+    def memory_relations(self, user_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT r.from_memory_id,r.to_memory_id,r.relation_type,r.created_at
+            FROM memory_relations r JOIN memories m ON m.memory_id=r.from_memory_id
+            WHERE m.user_id=? ORDER BY r.created_at,r.from_memory_id""",
+            (user_id,),
+        ).fetchall()
+        keys = ("from_memory_id", "to_memory_id", "relation_type", "created_at")
+        return [dict(zip(keys, row)) for row in rows]
 
     @staticmethod
     def _agent_goal_from_row(row: tuple | None) -> dict | None:
@@ -536,6 +796,9 @@ class EvidenceStore:
                 WHERE lane=? AND cancel_requested=0 AND (
                     status='queued' OR (status IN ({active_marks}) AND lease_expires_at<>'' AND lease_expires_at<=?)
                 ) AND (
+                    json_extract(candidate.payload_json,'$.not_before_at') IS NULL
+                    OR json_extract(candidate.payload_json,'$.not_before_at')<=?
+                ) AND (
                     json_extract(candidate.payload_json,'$.conversation_id') IS NULL
                     OR NOT EXISTS (
                         SELECT 1 FROM concurrency_leases AS active_lease
@@ -545,16 +808,17 @@ class EvidenceStore:
                               json_extract(candidate.payload_json,'$.conversation_id')
                     )
                 ) ORDER BY priority DESC,created_at,goal_id LIMIT 1""",
-                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now, now),
+                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now, now, now),
             ).fetchone()
             if row is None:
                 self.conn.commit()
                 return None
             goal_id, previous_status, attempt, goal_type = row
             recovered = previous_status != "queued"
-            next_status = previous_status if recovered else (
-                "context_building" if goal_type == "research_turn" else "planning"
-            )
+            next_status = previous_status if recovered else {
+                "research_turn": "context_building",
+                "conversation_summary": "summarizing",
+            }.get(goal_type, "planning")
             next_attempt = attempt + 1 if recovered else attempt
             self.conn.execute(
                 """UPDATE agent_goals SET status=?,stage=?,updated_at=?,lease_owner=?,
