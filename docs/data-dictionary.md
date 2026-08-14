@@ -26,6 +26,7 @@
 | `concurrency_leases` | 单 Worker 内交互/后台并发槽占用；以 Goal 唯一绑定 owner、lane、获取时间、heartbeat 和过期时间。 |
 | `content_quality_results` | 每个 evidence ID 的确定性完整性快照；保存内容哈希、解析版本、状态、缺失字段、问题码、正文/摘要/噪声指标和评估时间。 |
 | `extracted_facts` | 每个 evidence ID 的当前结构化事实；保存内容哈希、解析版本、审计状态、主体、发生时间、动作、原文数字、领域、地点、产业链位置、逐条错误和抽取时间。 |
+| `extraction_exceptions` | 历史重抽取异常队列；按 evidence ID、组合解析版本和阶段唯一，保存内容哈希、open/resolved、错误、尝试次数、首次/最近失败及解决时间。 |
 | `etf_market_snapshots` | 保存报告旁的独立动态 ETF 行情快照及 stale-if-error 状态。 |
 | `etf_preview_snapshots` | 保存天天基金产品目录、费率、规模、复权收益、申购状态及场内溢价/成交额的独立快照。 |
 | `report_assets` / `report_versions` | 每个已确认主题保存一条主报告资产及其经用户核实的不可变版本；版本 payload 冻结 `conclusion`、`report_sections`、审计和引用。 |
@@ -40,6 +41,8 @@ Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued �
 内容质量状态固定为 `publishable`、`needs_enrichment`、`rejected`。缺失字段包括 `raw_text`、`title`、`summary`、`distinct_summary`、`event_subject`、`event_action` 与 `clean_body`；对应问题码用于审计和重抽取路由。没有质量记录不等于通过。
 
 结构化事实状态为 `audited` 或 `incomplete`。`numbers_json` 只保存冻结原文逐字出现的数字 token；`domain` 与 `industry_chain_position` 无明确证据时为 `unknown`，`occurred_at`、`subject`、`action`、`location` 无明确值时为空字符串。模型输出审计使用 evidence ID 隔离错误项。
+
+历史重抽取结果中的 `effective_increment` 仅统计此前非 publishable、重抽取后变为 publishable 的 evidence；`recovery_point` 是本批最后检查的 event ID。异常状态只允许 `open`、`resolved`，重复失败增加 `attempt` 而不创建重复异常。
 
 所有关键表应在适用时包含 `created_at`、`updated_at`、`source`、`provenance`、`parser_version`、`confidence` 和 `content_hash`，避免无法解释的结论或未来数据泄漏。
 

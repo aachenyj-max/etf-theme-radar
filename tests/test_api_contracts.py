@@ -154,10 +154,12 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     assert "report_versions" in snapshot["database_tables"]
     assert "content_quality_results" in snapshot["database_tables"]
     assert "extracted_facts" in snapshot["database_tables"]
+    assert "extraction_exceptions" in snapshot["database_tables"]
     assert snapshot["status_enums"]["content_quality"] == [
         "publishable", "needs_enrichment", "rejected",
     ]
     assert snapshot["status_enums"]["extracted_fact"] == ["audited", "incomplete"]
+    assert snapshot["status_enums"]["extraction_exception"] == ["open", "resolved"]
     assert snapshot["status_enums"]["agent_goal"] == {
         "active": [
             "planning", "collecting", "extracting", "validating", "replanning",

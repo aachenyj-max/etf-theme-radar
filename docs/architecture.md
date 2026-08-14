@@ -18,6 +18,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 同一事务随后运行 `fact-extraction-v1`，将主体、发生日期、动作、原文数字、主题领域、显式地点和产业链位置写入 `extracted_facts`。确定性结果缺少主体/动作时标记 `incomplete`，不推断未知项。模型增强接口先核对输出条目与输入 evidence ID 的一一对应，再逐项验证数字必须存在于该 ID 的冻结原文；单项失败只拒绝该项并保存审计原因。
 
+历史重抽取从 `raw_documents` 与 `normalized_events` 只读构建质量/事实结果。`content_hash + content-quality-v1 + fact-extraction-v1` 均一致时跳过；批次按 event ID 排序并返回 `recovery_point`。缺失原文或写入异常追加/更新 `extraction_exceptions`，后续成功将同一异常置为 `resolved`。整个流程不写原始文档，也不改报告版本。
+
 普通主题研究由 SQLite 原子队列限制为一个执行槽，并维护按 `queue_position` 排序的 FIFO 多任务等待队列。`awaiting_*`、`returned` 与 `blocked_configuration` 属于独立人工处理状态，不占执行槽；执行项进入人工处理或终态后，在同一写事务中提升最早等待项。主题审核通过和退回任务重跑先追加到等待队列，只有排到队首且执行槽空闲时才恢复对应阶段。Worker 重启时会先提升遗留等待项，且不会并行领取两个普通研究任务。
 
 主题搜索在研究立项之前运行。`SyncDiscoveryWorker` 以 SQLite lease 串行领取来源同步任务，结束后对观察窗口内尚未分配的证据执行确定性词项/实体聚类。候选只在达到配置化可信度门槛后参与排序，状态依次为 `signal`、`validating`、`awaiting_confirmation`；人工确认或合并后才写入正式主题本体。DeepSeek 可在后续深研中解释证据与补缺口，但不能绕过此状态机。
@@ -51,6 +53,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 任务 1.2 当前应用表增加至 35 张，新增 `content_quality_results`；原表仍保持兼容。
 
 任务 1.3 当前应用表增加至 36 张，新增 `extracted_facts`；公开 API 形状未变化，契约版本保持 `2026-08-14.v11`。
+
+任务 1.4 当前应用表增加至 37 张，新增 `extraction_exceptions`；公开 API 形状未变化，契约版本保持 `2026-08-14.v11`。
 
 | 领域 | 表 |
 |---|---|

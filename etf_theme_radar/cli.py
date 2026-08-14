@@ -12,7 +12,7 @@ from .reports import build_daily_brief
 from .governance import reclassify_store
 from .comparisons import build_comparisons
 from .theme_research import run_theme_research
-from .evidence_summary_backfill import backfill_evidence_summaries
+from .evidence_summary_backfill import backfill_evidence_summaries, backfill_historical_extractions
 from .agent_runtime import analysis_llm_config
 from .etf_preview import audit_etf_preview_snapshot, collect_etf_preview_snapshot
 
@@ -36,6 +36,7 @@ def main() -> None:
     compare=sub.add_parser("compare"); compare.add_argument("--db",default="data/radar.db"); compare.add_argument("--output",default="data/reports/classification-comparisons.md")
     research=sub.add_parser("research"); research.add_argument("--db",default="data/radar.db"); research.add_argument("--theme",default="ai-infrastructure"); research.add_argument("--output",default="data/reports/theme-research")
     backfill=sub.add_parser("backfill-evidence-summaries"); backfill.add_argument("--db",default="data/radar.db"); backfill.add_argument("--report-id"); backfill.add_argument("--apply",action="store_true")
+    extraction_backfill=sub.add_parser("backfill-evidence-extractions"); extraction_backfill.add_argument("--db",default="data/radar.db"); extraction_backfill.add_argument("--apply",action="store_true"); extraction_backfill.add_argument("--limit",type=int); extraction_backfill.add_argument("--resume-after",default="")
     preview=sub.add_parser("etf-preview-sync"); preview.add_argument("--db",default="data/radar.db"); preview.add_argument("--cache-dir",default="data/cache/tiantian-etf-preview")
     preview_audit=sub.add_parser("etf-preview-audit"); preview_audit.add_argument("--db",default="data/radar.db")
     args=p.parse_args()
@@ -56,6 +57,15 @@ def main() -> None:
         store = EvidenceStore(args.db)
         try: result = backfill_evidence_summaries(store, analysis_llm_config(), apply=args.apply, report_id=args.report_id)
         finally: store.close()
+        print(json.dumps(result, ensure_ascii=False, indent=2)); return
+    if args.command == "backfill-evidence-extractions":
+        store = EvidenceStore(args.db)
+        try:
+            result = backfill_historical_extractions(
+                store, apply=args.apply, limit=args.limit, resume_after=args.resume_after,
+            )
+        finally:
+            store.close()
         print(json.dumps(result, ensure_ascii=False, indent=2)); return
     if args.command == "etf-preview-sync":
         snapshot = collect_etf_preview_snapshot(cache_dir=args.cache_dir)

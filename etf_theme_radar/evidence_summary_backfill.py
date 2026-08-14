@@ -5,6 +5,8 @@ from copy import deepcopy
 from typing import Any
 
 from .models import utcnow
+from .content_quality import PARSER_VERSION as CONTENT_QUALITY_VERSION, evaluate_content_quality
+from .fact_extraction import PARSER_VERSION as FACT_EXTRACTION_VERSION, extract_facts
 from .store import EvidenceStore
 from .theme_research import (
     EVIDENCE_SUMMARY_SCHEMA_VERSION,
@@ -172,4 +174,85 @@ def backfill_evidence_summaries(
             summary["updated"] += 1
         else:
             summary["skipped"].append({"report_id": asset["report_id"], "reason": "version_exists"})
+    return summary
+
+
+def backfill_historical_extractions(
+    store: EvidenceStore, *, apply: bool = False, limit: int | None = None,
+    resume_after: str = "",
+) -> dict[str, Any]:
+    """Rebuild quality and facts from immutable raw documents without rewriting them."""
+    parser_version = f"{CONTENT_QUALITY_VERSION}+{FACT_EXTRACTION_VERSION}"
+    stage = "historical_extraction"
+    events = sorted(store.events(), key=lambda item: str(item.get("event_id") or ""))
+    candidates = [item for item in events if str(item.get("event_id") or "") > resume_after]
+    has_more = limit is not None and len(candidates) > max(0, limit)
+    selected = candidates[:max(0, limit)] if limit is not None else candidates
+    summary: dict[str, Any] = {
+        "mode": "apply" if apply else "dry_run",
+        "scanned": 0,
+        "processed": 0,
+        "effective_increment": 0,
+        "skipped_current": 0,
+        "failed": [],
+        "failure_reasons": {},
+        "recovery_point": resume_after,
+        "has_more": has_more,
+    }
+    for event in selected:
+        event_id = str(event.get("event_id") or "")
+        content_hash = str(event.get("raw_content_hash") or "")
+        summary["scanned"] += 1
+        summary["recovery_point"] = event_id
+        quality = store.content_quality_result(event_id)
+        fact = store.extracted_fact(event_id)
+        quality_current = bool(
+            quality and quality["content_hash"] == content_hash
+            and quality["parser_version"] == CONTENT_QUALITY_VERSION
+        )
+        fact_current = bool(
+            fact and fact["content_hash"] == content_hash
+            and fact["parser_version"] == FACT_EXTRACTION_VERSION
+        )
+        if quality_current and fact_current:
+            summary["skipped_current"] += 1
+            continue
+        if not content_hash or not store.has_raw_document(content_hash):
+            reason = "missing_raw_document"
+            summary["failed"].append({"event_id": event_id, "reason": reason})
+            summary["failure_reasons"][reason] = summary["failure_reasons"].get(reason, 0) + 1
+            if apply:
+                store.record_extraction_exception(
+                    event_id, content_hash, parser_version, stage, reason, utcnow()
+                )
+            continue
+        raw_text = store.raw_text(content_hash)
+        now = utcnow()
+        quality_result = evaluate_content_quality(event, raw_text, evaluated_at=now)
+        fact_result = extract_facts(event, raw_text, extracted_at=now)
+        summary["processed"] += 1
+        became_publishable = bool(
+            (not quality or quality.get("status") != "publishable")
+            and quality_result.status == "publishable"
+        )
+        if not apply:
+            if became_publishable:
+                summary["effective_increment"] += 1
+            continue
+        try:
+            store.save_content_quality_result(quality_result.as_dict())
+            store.save_extracted_fact(fact_result.as_dict())
+            store.resolve_extraction_exception(event_id, parser_version, stage, now)
+            store.commit()
+            if became_publishable:
+                summary["effective_increment"] += 1
+        except Exception as exc:
+            store.rollback()
+            reason = type(exc).__name__
+            summary["processed"] -= 1
+            summary["failed"].append({"event_id": event_id, "reason": reason})
+            summary["failure_reasons"][reason] = summary["failure_reasons"].get(reason, 0) + 1
+            store.record_extraction_exception(
+                event_id, content_hash, parser_version, stage, str(exc), utcnow()
+            )
     return summary

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS agent_events (event_id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS concurrency_leases (lease_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL UNIQUE, lane TEXT NOT NULL, owner TEXT NOT NULL, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS content_quality_results (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, missing_fields_json TEXT NOT NULL, issues_json TEXT NOT NULL, metrics_json TEXT NOT NULL, evaluated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS extracted_facts (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, subject TEXT NOT NULL, occurred_at TEXT NOT NULL, action TEXT NOT NULL, numbers_json TEXT NOT NULL, domain TEXT NOT NULL, location TEXT NOT NULL, industry_chain_position TEXT NOT NULL, audit_errors_json TEXT NOT NULL, extracted_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS extraction_exceptions (exception_id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, error TEXT NOT NULL, attempt INTEGER DEFAULT 1, first_failed_at TEXT NOT NULL, last_failed_at TEXT NOT NULL, resolved_at TEXT NOT NULL, UNIQUE(event_id,parser_version,stage));
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -177,6 +178,7 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_concurrency_leases_lane ON concurrency_leases(lane,expires_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_quality_status ON content_quality_results(status,evaluated_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extracted_facts_status ON extracted_facts(status,extracted_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extraction_exceptions_status ON extraction_exceptions(status,last_failed_at)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -524,6 +526,49 @@ class EvidenceStore:
     def raw_text(self, content_hash: str) -> str:
         row = self.conn.execute("SELECT text FROM raw_documents WHERE content_hash=?", (content_hash,)).fetchone()
         return row[0] if row else ""
+
+    def has_raw_document(self, content_hash: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM raw_documents WHERE content_hash=?", (content_hash,)
+        ).fetchone() is not None
+
+    def record_extraction_exception(
+        self, event_id: str, content_hash: str, parser_version: str,
+        stage: str, error: str, failed_at: str,
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO extraction_exceptions
+            (event_id,content_hash,parser_version,stage,status,error,attempt,
+             first_failed_at,last_failed_at,resolved_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(event_id,parser_version,stage) DO UPDATE SET
+              content_hash=excluded.content_hash,status='open',error=excluded.error,
+              attempt=extraction_exceptions.attempt+1,
+              last_failed_at=excluded.last_failed_at,resolved_at=''""",
+            (event_id, content_hash, parser_version, stage, "open", error, 1,
+             failed_at, failed_at, ""),
+        )
+        self.conn.commit()
+
+    def resolve_extraction_exception(
+        self, event_id: str, parser_version: str, stage: str, resolved_at: str,
+    ) -> None:
+        self.conn.execute(
+            """UPDATE extraction_exceptions SET status='resolved',resolved_at=?
+            WHERE event_id=? AND parser_version=? AND stage=? AND status='open'""",
+            (resolved_at, event_id, parser_version, stage),
+        )
+
+    def extraction_exceptions(self, status: str | None = None) -> list[dict]:
+        query = """SELECT exception_id,event_id,content_hash,parser_version,stage,status,
+        error,attempt,first_failed_at,last_failed_at,resolved_at FROM extraction_exceptions"""
+        params: tuple = ()
+        if status:
+            query += " WHERE status=?"
+            params = (status,)
+        query += " ORDER BY exception_id"
+        keys = ("exception_id", "event_id", "content_hash", "parser_version", "stage", "status", "error", "attempt", "first_failed_at", "last_failed_at", "resolved_at")
+        return [dict(zip(keys, row)) for row in self.conn.execute(query, params)]
 
     def create_research_run(self, run_id: str, theme_id: str, created_at: str, request: dict | None = None, *, status: str = "queued", stage: str = "evidence_selection", database_path: str = "") -> None:
         self.conn.execute(

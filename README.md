@@ -32,6 +32,7 @@ python -m uvicorn etf_theme_radar.api:app --host 127.0.0.1 --port 8001 --reload
 - 三类 Agent 共用持久化 `agent_goals`、不可变安全事件和并发 lease；Goal 创建使用幂等键，领取、heartbeat、取消与过期恢复均由 SQLite 短事务控制。DeepSeek 本地并发默认 12，交互研究预留 10、信息规划/总结预留 2；429/503 时减半降载，冷却后逐槽恢复。
 - ingest 对每条标准化事件执行确定性信息完整性门，持久化 `publishable`、`needs_enrichment` 或 `rejected` 及缺失字段、问题和正文噪声指标。标题式摘要、空正文、导航/免责声明占比过高、缺少事件主体或动作的记录不会进入首页计数、主题评分快照或正式研究证据。
 - 同一 ingest 事务从冻结事件与原文提取主体、发生时间、动作、原文数字、领域、地点和产业链位置，写入 `extracted_facts`。未知项保持空值/`unknown`；模型增强结果必须逐条绑定输入 evidence ID，输出数量和每个数字均通过审计后才可接受。
+- 历史质量/事实可通过 `backfill-evidence-extractions` 在复制数据库上按批次幂等重建；内容哈希和两个解析版本都一致时跳过。输出记录处理数、有效新增、失败原因、恢复点和剩余批次；失败进入 `extraction_exceptions`，恢复后标记 resolved，原始文档不被覆盖。
 - SQLite lease-based 持久 Worker：研究任务与来源同步/主题发现分别由单一持久循环领取，支持 heartbeat、过期 lease 恢复、每日幂等启动补采及复核/取消的原子状态转换，不再为每次同步请求创建临时线程。
 - 研究任务使用“单执行槽 + FIFO 多任务等待队列 + 独立人工处理区”的 SQLite 原子队列。优先级为进行中、等待中、需要处理；待主题/报告复核、退回与配置阻断不占执行槽。执行任务进入人工处理或终态时原子提升最早等待项；主题审核通过与退回重跑先进入等待队列，空闲时自动开始。
 - 持久主题本体、别名、实体待复核队列和主题指标快照；只有两个可比快照后才输出 emerging/stable/cooling。
@@ -118,6 +119,7 @@ Windows 用户可双击 `启动ETF主题雷达.bat`。唯一前端为 `http://12
 - `python -m etf_theme_radar.cli etf-preview-sync --db data/radar.db` / `etf-preview-audit`：采集真实预览快照并审计分类、字段覆盖与溢价计算。
 - `npm.cmd run test:e2e`：通过 Playwright + 本机 Edge 验证主题复核、报告退回、重跑、通过和归档。
 - `python -m etf_theme_radar.cli backfill-evidence-summaries --db data/radar.db`：预览旧固定证据摘要的升级范围；增加 `--apply` 后以不可变 `V+1` 版本写入，旧版本与引用保持不变。
+- `python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy.db --apply --limit 500 --resume-after <event_id>`：仅在复制数据库或维护窗口中按恢复点重建历史完整性与事实结果。
 
 当前可靠性边界：Worker 是本地单进程实现，不是分布式队列；同步连接器、LLM 或浏览器已经进入同步调用后只能在返回时响应取消。上游不支持幂等键时，进程在外部调用成功但本地提交前崩溃仍可能在 lease 过期后重试。API 仍只允许绑定本机，不具备公网认证、授权或 CSRF 防护。ETF 流动性、指数规则和美国交易所主表尚未接入时不会推断结论。
 

@@ -34,6 +34,16 @@ Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6
 
 结构化事实保存在 `extracted_facts`，当前解析版本为 `fact-extraction-v1`。诊断摘要或事实缺失时同时核对 `content_hash`、`status` 与 `audit_errors_json`；数字必须回到对应 `raw_documents.text` 逐字复核。不要直接编辑事实行，历史数据由任务 1.4 的幂等回填工具处理。
 
+历史回填必须先复制数据库并在复制品执行：
+
+```powershell
+python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy.db --limit 500
+python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy.db --apply --limit 500
+python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy.db --apply --limit 500 --resume-after <recovery_point>
+```
+
+核对 `processed`、`effective_increment`、`failure_reasons`、`recovery_point` 和 `has_more`，并确认 `raw_documents` 行数/内容哈希未变化。`extraction_exceptions` 的 open 项必须查明缺失原文或写入错误；补齐后从合适恢复点重跑，成功项会变为 resolved。正式库仅在备份完成的维护窗口执行。
+
 Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`agent_events` 是只追加安全审计，`concurrency_leases` 是可过期槽位。遇到 429/503 时本地有效并发减半，冷却后逐槽恢复；不要通过增加 API/Worker 实例规避限速。Worker 重启后等待 lease 过期即可由新 owner 恢复，禁止人工直接改表抢占仍有效的 lease。
 
 所有产品材料仅为内部研究草案。使用前必须经过基金法务、合规、指数、AP/做市商和交易所上市团队复核。系统不提供投资、法律、税务或合规意见，也不执行任何交易。
