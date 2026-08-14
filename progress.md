@@ -443,7 +443,7 @@ flowchart LR
 - 前端：`frontend/src/components/research-workspace.tsx`、`frontend/src/services/research-workflow-gateway.ts`、`frontend/src/lib/research-workflow.ts`。
 - 测试：`tests/test_conversations.py`、`tests/test_context_builder.py`、`tests/test_memory.py`、`tests/test_summary_agent.py`、`tests/test_research_agent_modes.py`。
 
-- [ ] **任务 2.1：实现不可变消息、多对话和同对话串行**
+- [x] **任务 2.1：实现不可变消息、多对话和同对话串行**
   - API 通过幂等键写入消息；同一 `conversation_id` 只允许一个执行项，不同对话共享交互并发池。
   - 运行：`python -m pytest tests/test_conversations.py tests/test_research_queue.py -q`。
 - [ ] **任务 2.2：实现权限优先的上下文构建器**
@@ -609,3 +609,4 @@ flowchart LR
 | 2026-08-14 | 阶段 1 / 任务 1.5 | `f6a5c69` | `python -m pytest tests/test_etf_market.py tests/test_etf_preview.py tests/test_etf_discovery.py -q`：28 passed；`python -m pytest -q`：135 passed | 无；产品身份、日期或字段不一致均不会标记为已交叉验证；无缓存冷却与市场/预览空快照拒写已覆盖；任务 1.6 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.6 | `82d73f4` | `python -m pytest tests/test_scoring.py tests/test_theme_research_v2.py -q`：11 passed；契约/启动器回归：8 passed；`python -m pytest -q`：139 passed；契约导出：38 张表、`2026-08-14.v12` | 无；三个维度分别持久化，缺门槛时为 `not_assessed`，未提供综合分；任务 1.7 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.7 | `cfd47f9` | `python -m pytest -q`：139 passed；契约导出：38 张表、`2026-08-14.v12`；README、AGENTS、架构、数据字典与运行手册已完成阶段 1 收口 | 无；阶段 1 验收完成，未开始阶段 2 |
+| 2026-08-14 | 阶段 2 / 任务 2.1 | `6a78939` | RED：新模块缺失、同对话第二项被错误领取；`python -m pytest tests/test_conversations.py tests/test_research_queue.py -q`：7 passed；扩展回归：23 passed；`python -m pytest -q`：142 passed；契约导出：40 张表、`2026-08-14.v13`；隔离验证首次启动、健康复用、端口占用失败三路径通过 | 无；不可变消息、API 幂等重放和同对话串行已落地，任务 2.2 尚未开始 |
