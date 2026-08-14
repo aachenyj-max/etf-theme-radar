@@ -54,6 +54,8 @@ Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`ag
 
 上下文权限异常时，先检查记忆/知识项的 `owner_user_id`、`allowed_user_ids`，以及关联摘要的 `conversation_id` 是否出现在当前对话显式允许集合中。构建审计只应显示各层拒绝数量，不能记录被拒绝内容。若关键消息未进入上下文，检查该项 `token_count`、总 `token_budget` 和 `truncated_layers`；高信任层被截断后低信任层保持空白是预期行为。任务 2.2 回归命令为 `python -m pytest tests/test_context_builder.py tests/test_ontology_and_security.py -q`。
 
+三响应模式诊断：`answer_now` 出现工具调用表示路由或调用方越界；`quick_retrieve` 的 `retrieval_sources` 最多 3 项，必须因证据充分、来源检查完成或快速预算耗尽停止；`background_research` 响应应先包含 `phase_answer_ready`，随后为 `background_goal_created`。重复同一消息序号时检查是否复用 `background_research:{conversation_id}:{message_seq}`。若回答被拒绝，核对 citations 是否都存在于冻结证据或本轮工具结果。任务 2.3 回归命令为 `python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`。
+
 研究完成后可按 `theme_id` 和运行 ID 在 `independent_score_snapshots` 核对三条评分。`not_assessed` 表示来源类型、历史快照或已核验 ETF 数量未达到配置门槛；不得手工补零、将旧主题强度当综合分，或跨三个维度自行加权。公式、门槛与 `independent-scores-v1` 版本均来自 `config/defaults.yaml`。
 
 阶段 1 发布前检查：契约导出应为 38 张应用表和 `2026-08-14.v12`；全量 pytest 必须通过；抽样确认 Agent lease 可恢复、质量失败不进入正式研究、历史回填不改原文、ETF 空结果不覆盖缓存，以及每个研究运行恰有三个独立评分维度。任一项失败都不得进入后续阶段。

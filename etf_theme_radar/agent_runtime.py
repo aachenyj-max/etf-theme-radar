@@ -42,6 +42,77 @@ SOURCE_ALIASES = {
 }
 
 
+def route_research_turn(
+    *, context_sufficient: bool, requires_latest: bool,
+    missing_critical_facts: list[str], quick_retrieval_sources: list[str],
+) -> dict[str, Any]:
+    """Choose the fastest reliable response mode without invoking a model."""
+    if context_sufficient and not requires_latest:
+        return {
+            "mode": "answer_now",
+            "retrieval_sources": [],
+            "stop_conditions": ["frozen_context_sufficient"],
+        }
+    bounded_sources = list(dict.fromkeys(quick_retrieval_sources))[:3]
+    if bounded_sources and len(missing_critical_facts) <= 2:
+        return {
+            "mode": "quick_retrieve",
+            "retrieval_sources": bounded_sources,
+            "stop_conditions": [
+                "evidence_sufficient", "all_selected_sources_checked",
+                "quick_budget_exhausted",
+            ],
+        }
+    return {
+        "mode": "background_research",
+        "retrieval_sources": [],
+        "stop_conditions": ["background_goal_created"],
+    }
+
+
+def prepare_research_turn(
+    store: EvidenceStore, *, conversation_id: str, message_seq: int,
+    phase_answer: str, selected_theme_id: str,
+    missing_critical_facts: list[str], created_at: str, background_goal_id: str,
+) -> dict[str, Any]:
+    """Return a phase answer and idempotently enqueue deeper evidence work."""
+    payload = {
+        "conversation_id": conversation_id,
+        "message_seq": message_seq,
+        "selected_theme_id": selected_theme_id,
+        "phase_answer": phase_answer,
+        "missing_critical_facts": list(missing_critical_facts),
+    }
+    goal = store.create_agent_goal(
+        goal_id=background_goal_id,
+        idempotency_key=f"background_research:{conversation_id}:{message_seq}",
+        goal_type="information_collection",
+        lane="background",
+        payload=payload,
+        created_at=created_at,
+    )
+    replay = bool(goal.get("idempotent_replay"))
+    return {
+        "mode": "background_research",
+        "events": ["phase_answer_ready", "background_goal_created"],
+        "phase_answer": str(goal["payload"]["phase_answer"]),
+        "background_goal": goal,
+        "idempotent_replay": replay,
+    }
+
+
+def validate_research_answer(
+    answer: dict[str, Any], *, frozen_evidence_ids: set[str],
+    tool_result_ids: set[str],
+) -> dict[str, Any]:
+    allowed = frozen_evidence_ids | tool_result_ids
+    citations = [str(item) for item in answer.get("citations") or []]
+    invalid = sorted(set(citations) - allowed)
+    if invalid:
+        raise ValueError(f"Research answer contains unavailable citation IDs: {', '.join(invalid)}")
+    return answer
+
+
 def _numeric_config(section_name: str) -> dict[str, float]:
     result: dict[str, float] = {}
     section = ""

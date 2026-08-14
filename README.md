@@ -32,6 +32,7 @@ python -m uvicorn etf_theme_radar.api:app --host 127.0.0.1 --port 8001 --reload
 - 三类 Agent 共用持久化 `agent_goals`、不可变安全事件和并发 lease；Goal 创建使用幂等键，领取、heartbeat、取消与过期恢复均由 SQLite 短事务控制。DeepSeek 本地并发默认 12，交互研究预留 10、信息规划/总结预留 2；429/503 时减半降载，冷却后逐槽恢复。
 - 研究对话与消息持久化到 `conversations`、`conversation_messages`。用户消息使用对话内幂等键写入并分配连续 `message_seq`，数据库触发器禁止更新或删除既有消息；消息与交互 Goal 在同一事务创建。同一对话的后续 Goal 必须等待当前 lease 释放，不同对话可共享交互并发池。
 - 研究上下文由确定性构建器按固定信任层级和 token 预算装配。私有记忆、关联对话摘要和知识片段先做用户权限过滤，再参与预算选择；关联摘要还必须由当前对话显式允许。预算不足时优先保留正式主题资产、检查点和最新消息，不允许低信任层越级占用空间。
+- 研究 Agent v1 使用 `answer_now`、`quick_retrieve`、`background_research` 三种确定性响应模式。已有冻结上下文足够时不调用工具；快速检索最多选择 3 个直接相关来源并按充分证据/来源耗尽/预算耗尽停止；长研究先返回阶段性回答，再幂等创建后台信息 Goal。回答引用必须属于冻结 evidence ID 或本轮工具返回 ID。
 - ingest 对每条标准化事件执行确定性信息完整性门，持久化 `publishable`、`needs_enrichment` 或 `rejected` 及缺失字段、问题和正文噪声指标。标题式摘要、空正文、导航/免责声明占比过高、缺少事件主体或动作的记录不会进入首页计数、主题评分快照或正式研究证据。
 - 同一 ingest 事务从冻结事件与原文提取主体、发生时间、动作、原文数字、领域、地点和产业链位置，写入 `extracted_facts`。未知项保持空值/`unknown`；模型增强结果必须逐条绑定输入 evidence ID，输出数量和每个数字均通过审计后才可接受。
 - 历史质量/事实可通过 `backfill-evidence-extractions` 在复制数据库上按批次幂等重建；内容哈希和两个解析版本都一致时跳过。输出记录处理数、有效新增、失败原因、恢复点和剩余批次；失败进入 `extraction_exceptions`，恢复后标记 resolved，原始文档不被覆盖。
