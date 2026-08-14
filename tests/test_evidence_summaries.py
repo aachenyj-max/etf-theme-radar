@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from etf_theme_radar.evidence_summary_backfill import backfill_evidence_summaries, _hydrate_historical_cards
+from etf_theme_radar.models import RawDocument
+from etf_theme_radar.official_connectors import OfficialEtfHoldingsConnector
 from etf_theme_radar.store import EvidenceStore
 from etf_theme_radar.theme_research import (
     LEGACY_EVIDENCE_SUMMARY,
     _fallback_chinese_evidence,
     _llm_evidence_analysis,
 )
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _legacy_card(evidence_id: str = "e-1") -> dict:
@@ -128,3 +134,35 @@ def test_backfill_appends_immutable_version_and_is_idempotent(tmp_path) -> None:
     assert again["updated"] == 0
     assert len(store.report_versions(report_id)) == 2
     store.close()
+
+
+def test_title_equals_summary_baseline_fixture_is_deidentified() -> None:
+    sample = json.loads((FIXTURES / "title_equals_summary.json").read_text(encoding="utf-8"))
+
+    assert sample["title"] == sample["summary"]
+    assert sample["expected_issue"] == "title_equals_summary"
+    assert sample["source_url"].startswith("https://")
+    assert ".invalid/" in sample["source_url"]
+    assert not ({"account", "email", "token", "cookie"} & set(sample))
+
+
+def test_holdings_navigation_noise_baseline_fixture_reproduces_parser_pollution(tmp_path) -> None:
+    source_url = "https://issuer.example.invalid/funds/sample/holdings"
+    connector = OfficialEtfHoldingsConnector(
+        tmp_path / "holdings",
+        feeds=[{"ticker": "SAMP", "url": source_url, "format": "html"}],
+    )
+    connector.records[source_url] = connector.feeds[0]
+    document = RawDocument(
+        source="official_etf_holdings",
+        source_url=source_url,
+        title="SAMP official holdings",
+        text=(FIXTURES / "holdings_navigation_noise.html").read_text(encoding="utf-8"),
+        source_type="etf",
+    )
+
+    summary = connector.normalize(document)[0].summary
+
+    assert "Home Products Research Insights" in summary
+    assert "Sample Semiconductor" in summary
+    assert "10.50%" in summary

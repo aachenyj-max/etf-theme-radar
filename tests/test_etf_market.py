@@ -1,9 +1,14 @@
+import json
 from pathlib import Path
 
+from etf_theme_radar import etf_market
 from etf_theme_radar.etf_market import calculate_market_metrics, collect_dual_source_market_snapshot, collect_market_snapshot, match_competitors
 from etf_theme_radar.etf_discovery import verify_etf_candidate
 from etf_theme_radar.store import EvidenceStore
 from etf_theme_radar.workflow import execute_market_refresh
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _rows(count: int = 90, *, rising: bool = True) -> list[dict]:
@@ -172,6 +177,25 @@ def test_market_failure_uses_last_successful_cache(tmp_path: Path) -> None:
     assert second["products"][0]["last_close"] == first["products"][0]["last_close"]
 
 
+def test_aiq_wtai_rate_limit_baseline_fixture_isolated_per_ticker(tmp_path: Path, monkeypatch) -> None:
+    sample = json.loads((FIXTURES / "etf_rate_limits.json").read_text(encoding="utf-8"))
+    errors = {item["yahoo_symbol"]: item["error"] for item in sample["failures"]}
+    monkeypatch.setitem(etf_market.SETTINGS, "refresh_retry_attempts", 1)
+    requested: list[str] = []
+
+    def fetcher(symbol: str) -> list[dict]:
+        requested.append(symbol)
+        raise RuntimeError(errors[symbol])
+
+    snapshot = collect_market_snapshot(sample["products"], tmp_path / "rate-limit-cache", fetcher)
+
+    assert requested == ["AIQ", "WTAI"]
+    assert snapshot["status"] == "unknown"
+    assert [item["ticker"] for item in snapshot["products"]] == ["AIQ", "WTAI"]
+    assert all(item["data_status"] == "unavailable" for item in snapshot["products"])
+    assert [item["error"] for item in snapshot["products"]] == [errors["AIQ"], errors["WTAI"]]
+
+
 def test_dual_source_snapshot_preserves_field_provenance_and_conflicts(tmp_path: Path) -> None:
     snapshot = collect_dual_source_market_snapshot(
         [{"ticker": "513100", "yahoo_symbol": "513100.SS", "fund_name": "Nasdaq ETF", "currency": "CNY"}],
@@ -199,7 +223,8 @@ def test_failed_dual_refresh_does_not_overwrite_last_successful_snapshot(tmp_pat
     store.save_etf_market_snapshot({"snapshot_id":"good","report_id":"report:retain","collected_at":created,"market_as_of":"2026-07-31","status":"available","products":[{"ticker":"BOTZ"}],"payload":{"products":[{"ticker":"BOTZ"}]}})
     store.create_research_run("failed-refresh","report-refresh:report:retain",created,{"report_id":"report:retain"},status="queued",stage="market_refresh",database_path=str(database))
     store.close()
-    monkeypatch.setattr("etf_theme_radar.workflow.collect_dual_source_market_snapshot",lambda *_args,**_kwargs:{"status":"unknown","products":[],"source_status":{"yfinance":{"status":"unknown"},"tiantian":{"status":"not_assessed"}}})
+    empty_snapshot = json.loads((FIXTURES / "empty_etf_snapshot.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr("etf_theme_radar.workflow.collect_dual_source_market_snapshot",lambda *_args,**_kwargs:empty_snapshot)
     execute_market_refresh(str(database),"failed-refresh")
     store=EvidenceStore(database)
     assert store.latest_etf_market_snapshot("report:retain")["snapshot_id"] == "good"

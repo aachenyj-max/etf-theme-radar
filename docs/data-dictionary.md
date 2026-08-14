@@ -37,3 +37,16 @@
 ETF 预览统一字段：`operating_fee=management_fee+custody_fee`，单位为年化百分比；`scale_billion` 单位亿元；`return_2025` 为2025自然年度复权累计净值涨幅；`rolling_1y` 为截至最新有效净值日向前一年涨幅；`yesterday_return` 为最新公布的单日净值涨幅。`premium_rate=(同日收盘价/同日单位净值-1)×100%`，缺少同日值时必须为 `NULL`；`average_turnover_billion_20d` 为最多20个可用交易日的平均成交额，单位亿元。
 
 美股主动分类证据保存在 `classification_evidence`。`name_or_profile` 表示基金名称或概况明确指向美国；`latest_top10_us_majority` 记录 `holdings_as_of`、美股/全部持仓数量及披露权重、`us_share`，门槛来自 `config/etf-preview.json`，当前为至少5只美股且美股占前十大披露权重不低于50%。
+
+## 阶段 0 数据质量基准 fixture
+
+以下样本仅用于离线回归，域名、发行人、产品名称和正文均已脱敏；它们记录已知输入缺陷或失败边界，不代表真实持仓、行情或来源状态：
+
+| Fixture | 冻结问题 | 回归用途 |
+|---|---|---|
+| `tests/fixtures/title_equals_summary.json` | 标题被原样写入摘要，缺少事件主体、动作和事实正文 | 阶段 1 完整性门与历史重抽取输入 |
+| `tests/fixtures/holdings_navigation_noise.html` | HTML 持仓页的导航、页脚与真实持仓表混在同一正文 | 阶段 1 持仓正文抽取与导航噪声过滤 |
+| `tests/fixtures/etf_rate_limits.json` | AIQ、WTAI 分别返回脱敏 429 / rate-limit 错误 | 验证逐 ticker 失败隔离、冷却和最后成功缓存 |
+| `tests/fixtures/empty_etf_snapshot.json` | 天天基金网与 yfinance 均无可用产品 | 验证空结果拒写且不覆盖最后成功快照 |
+
+`title_equals_summary` 与持仓导航污染在本阶段只做基线冻结，不宣称质量问题已修复。ETF 失败样本则继续验证现有安全边界：单 ticker 失败不阻断其他产品，两源均空时研究运行失败并保留最后成功快照。

@@ -1,0 +1,18 @@
+{
+  "status": "unknown",
+  "market_as_of": "",
+  "products": [],
+  "source_status": {
+    "yfinance": {
+      "status": "unknown",
+      "error": "429 Too Many Requests: no usable ticker response"
+    },
+    "tiantian": {
+      "status": "not_assessed",
+      "error": "No comparable domestic product in this baseline sample"
+    }
+  },
+  "limitations": [
+    "Deidentified baseline: neither source returned a usable product."
+  ]
+}

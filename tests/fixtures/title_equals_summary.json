@@ -1,0 +1,10 @@
+{
+  "event_id": "baseline-title-summary-001",
+  "source": "example_research_feed",
+  "source_url": "https://research.example.invalid/items/baseline-001",
+  "source_type": "academic",
+  "title": "Sample AI infrastructure outlook",
+  "summary": "Sample AI infrastructure outlook",
+  "published_at": "2026-07-15T00:00:00+00:00",
+  "expected_issue": "title_equals_summary"
+}

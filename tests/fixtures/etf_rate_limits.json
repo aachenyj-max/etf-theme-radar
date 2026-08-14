@@ -1,0 +1,32 @@
+{
+  "products": [
+    {
+      "ticker": "AIQ",
+      "yahoo_symbol": "AIQ",
+      "fund_name": "Sample AI ETF",
+      "issuer": "Example Issuer A",
+      "category": "artificial_intelligence",
+      "currency": "USD"
+    },
+    {
+      "ticker": "WTAI",
+      "yahoo_symbol": "WTAI",
+      "fund_name": "Sample Technology ETF",
+      "issuer": "Example Issuer B",
+      "category": "artificial_intelligence",
+      "currency": "USD"
+    }
+  ],
+  "failures": [
+    {
+      "yahoo_symbol": "AIQ",
+      "status_code": 429,
+      "error": "429 Too Many Requests: rate limited for AIQ"
+    },
+    {
+      "yahoo_symbol": "WTAI",
+      "status_code": 429,
+      "error": "429 Too Many Requests: rate limited for WTAI"
+    }
+  ]
+}
