@@ -416,7 +416,7 @@ flowchart LR
 - [x] **任务 1.3：增加结构化事实抽取与逐条审计**
   - 从冻结原文抽取主体、时间、动作、数字、领域、地点和产业链位置；模型输出逐项绑定输入 evidence ID 并校验条目数/数字。
   - 运行：`python -m pytest tests/test_fact_extraction.py tests/test_evidence_summaries.py -q`。
-- [ ] **任务 1.4：历史原文重抽取**
+- [x] **任务 1.4：历史原文重抽取**
   - 扩展 `evidence_summary_backfill.py`，按内容哈希和解析版本幂等回填；失败进入异常队列，不覆盖原文。
   - 使用复制数据库演练，记录处理数、有效增量、失败原因和可恢复点。
 - [ ] **任务 1.5：修复全球/国内 ETF 刷新边界**
@@ -605,3 +605,4 @@ flowchart LR
 | 2026-08-14 | 阶段 1 / 任务 1.1 | `b9b3260` | `python -m pytest tests/test_agent_goals.py tests/test_agent_runtime.py tests/test_worker_reliability.py -q`：24 passed；相关契约/启动器回归合计 32 passed；`python -m pytest -q`：111 passed；契约导出：34 张表、`2026-08-14.v10` | 无；任务 1.2 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.2 | `b2f23e2` | `python -m pytest tests/test_content_quality.py tests/test_evidence_summaries.py -q`：14 passed；`python -m pytest -q`：119 passed；契约导出：35 张表、`2026-08-14.v11` | 历史无质量结果的原文仍待任务 1.4 幂等回填；任务 1.3 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.3 | `3f6f47a` | `python -m pytest tests/test_fact_extraction.py tests/test_evidence_summaries.py -q`：12 passed；`python -m pytest -q`：125 passed；契约导出：36 张表、`2026-08-14.v11` | 历史原文事实与质量结果仍待任务 1.4 幂等回填；任务 1.4 尚未开始 |
+| 2026-08-14 | 阶段 1 / 任务 1.4 | `644c2df` | 复制数据库演练及相关回归：`python -m pytest tests/test_extraction_backfill.py tests/test_evidence_summaries.py tests/test_fact_extraction.py tests/test_content_quality.py tests/test_api_contracts.py::test_contract_snapshot_exports_runtime_and_frontend_dependencies -q`：25 passed；`python -m pytest -q`：129 passed；契约导出：37 张表、`2026-08-14.v11` | 无；正式库执行前仍须按运行手册完成备份并使用复制库/维护窗口；任务 1.5 尚未开始 |
