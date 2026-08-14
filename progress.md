@@ -422,7 +422,7 @@ flowchart LR
 - [x] **任务 1.5：修复全球/国内 ETF 刷新边界**
   - 产品身份、日期、字段不一致时禁止“交叉验证”；支持单源已标注快照、最后成功缓存、逐 ticker 冷却和空结果拒写。
   - 运行：`python -m pytest tests/test_etf_market.py tests/test_etf_preview.py tests/test_etf_discovery.py -q`。
-- [ ] **任务 1.6：落地三个独立评分快照**
+- [x] **任务 1.6：落地三个独立评分快照**
   - 配置化公式与门槛，保存状态、截至日、覆盖率、版本和原因；不提供综合分字段。
   - 运行：`python -m pytest tests/test_scoring.py tests/test_theme_research_v2.py -q`。
 - [ ] **任务 1.7：同步文档并提交**
@@ -607,3 +607,4 @@ flowchart LR
 | 2026-08-14 | 阶段 1 / 任务 1.3 | `3f6f47a` | `python -m pytest tests/test_fact_extraction.py tests/test_evidence_summaries.py -q`：12 passed；`python -m pytest -q`：125 passed；契约导出：36 张表、`2026-08-14.v11` | 历史原文事实与质量结果仍待任务 1.4 幂等回填；任务 1.4 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.4 | `644c2df` | 复制数据库演练及相关回归：`python -m pytest tests/test_extraction_backfill.py tests/test_evidence_summaries.py tests/test_fact_extraction.py tests/test_content_quality.py tests/test_api_contracts.py::test_contract_snapshot_exports_runtime_and_frontend_dependencies -q`：25 passed；`python -m pytest -q`：129 passed；契约导出：37 张表、`2026-08-14.v11` | 无；正式库执行前仍须按运行手册完成备份并使用复制库/维护窗口；任务 1.5 尚未开始 |
 | 2026-08-14 | 阶段 1 / 任务 1.5 | `f6a5c69` | `python -m pytest tests/test_etf_market.py tests/test_etf_preview.py tests/test_etf_discovery.py -q`：28 passed；`python -m pytest -q`：135 passed | 无；产品身份、日期或字段不一致均不会标记为已交叉验证；无缓存冷却与市场/预览空快照拒写已覆盖；任务 1.6 尚未开始 |
+| 2026-08-14 | 阶段 1 / 任务 1.6 | `82d73f4` | `python -m pytest tests/test_scoring.py tests/test_theme_research_v2.py -q`：11 passed；契约/启动器回归：8 passed；`python -m pytest -q`：139 passed；契约导出：38 张表、`2026-08-14.v12` | 无；三个维度分别持久化，缺门槛时为 `not_assessed`，未提供综合分；任务 1.7 尚未开始 |
