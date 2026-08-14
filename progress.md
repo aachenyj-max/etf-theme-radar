@@ -383,7 +383,7 @@ flowchart LR
 
 **主要文件：** `etf_theme_radar/store.py`、`etf_theme_radar/api.py`、`etf_theme_radar/worker.py`、`frontend/src/services/*`、`tests/test_api_contracts.py`、`docs/architecture.md`。
 
-- [ ] **任务 0.1：冻结现有数据库与 API 契约**
+- [x] **任务 0.1：冻结现有数据库与 API 契约**
   - 导出当前表、状态枚举、路由、契约版本和前端网关依赖到 `docs/architecture.md`。
   - 新增契约测试，断言旧报告路由 `report:run_id`、队列语义和 `/api/capabilities` 仍兼容。
   - 运行：`python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`；预期全部通过。
@@ -599,3 +599,4 @@ flowchart LR
 
 | 日期 | 阶段 / 任务 | 提交 | 验证命令与结果 | 未解决问题 |
 |---|---|---|---|---|
+| 2026-08-14 | 阶段 0 / 任务 0.1 | `3b294e6` | `python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`：8 passed；`python -m pytest -q`：98 passed | 无；契约版本未改变，任务 0.2 尚未开始 |
