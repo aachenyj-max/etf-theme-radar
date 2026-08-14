@@ -23,3 +23,75 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 现有连接器覆盖 SEC、OpenAlex、公开招聘、发行人 ETF 持仓、Yahoo Finance ETF 公开资讯及受控公开发现；来源按授权与可用性降级。ETF 信号不参与候选主题的最低成立条件，只在主题形成后描述可投资性与拥挤度，缺失时保持 `not_assessed`。
 
 主题评分由配置与确定性代码共同驱动。只有在至少具备三类独立来源、其中一类为官方来源，且上市公司覆盖满足阈值时，主题才能获得高置信度。社交媒体与 Seeking Alpha 均为可选来源，默认关闭，不能单独支持产品发行结论。
+
+## 2026-08-14 契约冻结基线
+
+本节冻结阶段 0 / 任务 0.1 开始时的兼容面，不引入新业务行为。可运行 `python tools/export_contract_snapshot.py` 从临时 SQLite、FastAPI 路由表和 `frontend/src/services/*.ts` 重新导出机器可读 JSON，并用 `tests/test_api_contracts.py` 检查关键项。
+
+### 服务身份与报告标识
+
+- 服务 ID：`etf-theme-radar`。
+- 公共契约版本：`2026-08-05.v9`；`/health` 与 `/api/capabilities` 必须报告相同版本。本任务未新增或改变公共 API，因此不提升版本。
+- 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
+
+### SQLite 表
+
+当前应用表共 31 张；SQLite 内部的 `sqlite_*` 表不计入契约：
+
+| 领域 | 表 |
+|---|---|
+| 原始证据与治理 | `raw_documents`、`normalized_events`、`citations`、`connector_health` |
+| 主题与评分 | `themes`、`theme_aliases`、`theme_snapshots`、`theme_scores` |
+| 候选发现 | `theme_candidates`、`candidate_evidence`、`candidate_entities`、`candidate_aliases`、`discovery_runs`、`source_watermarks` |
+| 实体 | `entities`、`entity_aliases`、`entity_links` |
+| 研究运行与审计 | `research_runs`、`run_registry`、`run_steps`、`approvals`、`agent_runs`、`tool_calls` |
+| 报告与引用 | `report_assets`、`report_versions`、`report_claims`、`report_claim_evidence` |
+| ETF 与同步 | `etf_market_snapshots`、`etf_preview_snapshots`、`sync_runs` |
+| 旧兼容资产 | `product_proposals` |
+
+状态列目前是 SQLite `TEXT`，没有数据库 `CHECK` 约束；下列集合由 API、Store、Worker 与确定性状态机控制：
+
+| 状态域 | 当前值 |
+|---|---|
+| 普通研究执行槽 | `planning`、`queued`、`collecting`、`governing`、`analyzing`、`auditing` |
+| 普通研究暂停/人工处理/终态 | `waiting`、`awaiting_theme_review`、`awaiting_report_review`、`returned`、`blocked_configuration`、`completed`、`cancelled`、`failed` |
+| 主题候选 | `signal`、`validating`、`awaiting_confirmation`、`confirmed`、`merged`、`rejected` |
+| 来源同步 | `queued`、`running`、`completed`、`cancelled`、`failed` |
+| 发现运行 | `queued`、`running`、`completed`、`failed` |
+| 报告资产 | `deep_research`、`watch`、`completed`、`draft`、`archived` |
+| 主题定义 | `draft`、`confirmed` |
+| 实体复核 | `pending`、`confirmed`、`rejected` |
+| 连接器健康 | `healthy`、`degraded`、`disabled` |
+
+队列兼容语义：同一 SQLite 数据库只允许一个普通研究执行项；其余任务按 `queue_position` FIFO 等待。执行项释放槽位与最早等待项提升位于同一事务。人工处理状态不占执行槽；审核通过或退回重跑先加入等待队列。列表顺序为执行中、等待中、需要处理、其他终态。
+
+### FastAPI 路由
+
+以下为应用路由表中的冻结清单，不含 FastAPI 自动生成的 OpenAPI/文档路由：
+
+| 领域 | 方法与路径 |
+|---|---|
+| 健康与能力 | `GET /health`；`GET /api/capabilities`；`GET /api/connectors/health` |
+| 认证 | `GET /api/auth/session`；`POST /api/auth/login`；`POST /api/auth/logout` |
+| ETF 预览 | `GET /api/etf-preview`；`POST /api/etf-preview/refresh` |
+| 采集同步 | `POST /api/pipeline/run`；`POST /api/sync`；`GET/POST /api/sync-runs`；`GET /api/sync-runs/{sync_run_id}`；`POST /api/sync-runs/{sync_run_id}/cancel` |
+| 证据 | `GET /api/evidence`；`GET /api/evidence/facets`；`GET /api/evidence/{evidence_id}` |
+| 主题与发现 | `GET /api/themes`；`GET /api/theme-candidates`；`GET /api/theme-candidates/{candidate_id}`；`POST /api/theme-candidates/{candidate_id}/review`；`GET /api/discovery-runs` |
+| 实体 | `GET /api/entities/review`；`POST /api/entities/{entity_id}/review` |
+| 首页与搜索 | `GET /api/dashboard`；`GET /api/search` |
+| 报告库 | `POST /api/reports/daily`；`GET /api/reports`；`POST /api/reports/assistant`；`GET/PATCH/DELETE /api/reports/{report_id}` |
+| 报告详情 | `GET /api/reports/{report_id}/detail`；`GET /api/reports/{report_id}/versions`；`GET /api/reports/{report_id}/timeline`；`GET /api/reports/{report_id}/compare`；`POST /api/reports/{report_id}/market-snapshot` |
+| 统一主题研究 | `GET/POST /api/research-runs`；`GET /api/research-runs/{run_id}`；`GET /api/research-runs/{run_id}/stream`；`GET /api/research-runs/{run_id}/report`；`POST /api/research-runs/{run_id}/theme-review`；`POST /api/research-runs/{run_id}/report-review`；`POST /api/research-runs/{run_id}/rerun`；`POST /api/research-runs/{run_id}/cancel`；`POST /api/research-runs/{run_id}/finish` |
+| 旧事件研究兼容 | `POST /api/event-research-runs`；`GET /api/event-research-runs/{run_id}`；`GET /api/event-research-runs/{run_id}/report` |
+
+### 前端 gateway 依赖
+
+| 文件 | API 依赖 |
+|---|---|
+| `evidence-explorer-gateway.ts` | `/api/evidence`、`/api/evidence/{evidence_id}` |
+| `report-detail-gateway.ts` | `/api/reports/{report_id}/detail`、`/timeline`、`/compare`、`/market-snapshot` |
+| `report-library-gateway.ts` | `/api/reports`、`/api/reports/{report_id}`、`/api/reports/assistant` |
+| `research-workflow-gateway.ts` | `/api/research-runs`、`/api/research-runs/{run_id}`、`/stream`、`/cancel`、`/finish`、`/theme-review`、`/report-review`、`/rerun` |
+| `theme-radar-gateway.ts` | `/api/themes`、`/api/theme-candidates/{candidate_id}/review` |
+
+`app-shell.tsx`、`source-intelligence-wall.tsx`、`system-workspace.tsx` 等组件还直接读取 `/api/capabilities`、`/api/search` 和同步状态；这些属于现有组件依赖，不应被误认为可移除的未使用路由。

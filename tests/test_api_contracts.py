@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -9,11 +12,17 @@ from etf_theme_radar.api import _research_run_snapshot, app
 from etf_theme_radar.store import EvidenceStore
 
 
+PROJECT_ROOT = Path(__file__).parents[1]
+
+
 def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -> None:
     db = tmp_path / "api.db"
     monkeypatch.setenv("DATABASE_PATH", str(db))
     monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("SEC_USER_AGENT", "contract-test test@example.com")
+    monkeypatch.setenv("ANYSEARCH_ENABLED", "true")
+    monkeypatch.setenv("SP_GLOBAL_ENABLED", "false")
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200 and health.json()["trading"] == "disabled"
@@ -85,3 +94,91 @@ def test_stream_snapshot_exposes_running_tool_and_incremental_progress(tmp_path:
         "started_at": "2026-08-05T00:00:01+00:00", "finished_at": "", "source": "arxiv",
         "evidence_delta": 0, "relevant_evidence_delta": 0, "latency_ms": 0,
     }]
+
+
+def test_legacy_report_id_resolves_registered_run_database(tmp_path: Path, monkeypatch) -> None:
+    registry_db = tmp_path / "registry.db"
+    run_db = tmp_path / "legacy-run.db"
+    monkeypatch.setenv("DATABASE_PATH", str(registry_db))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+
+    created_at = "2026-08-05T00:00:00+00:00"
+    registry = EvidenceStore(registry_db)
+    registry.register_run("legacy-run", str(run_db), created_at)
+    registry.close()
+
+    run_store = EvidenceStore(run_db)
+    run_store.save_report_asset({
+        "report_id": "report:legacy-run",
+        "run_id": "legacy-run",
+        "title": "旧版机器人主题报告",
+        "kind": "theme_report",
+        "theme_id": "robotics",
+        "folder_id": "robotics",
+        "status": "watch",
+        "tags": ["机器人"],
+        "summary": "旧版报告摘要。",
+        "updated_at": created_at,
+        "created_at": created_at,
+        "version": 1,
+        "source_count": 2,
+        "evidence_count": 3,
+        "audit_passed": True,
+    })
+    run_store.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/reports/report%3Alegacy-run/detail")
+
+    assert response.status_code == 200
+    assert response.json()["reportId"] == "report:legacy-run"
+    assert response.json()["runId"] == "legacy-run"
+
+
+def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
+    result = subprocess.run(
+        [sys.executable, "tools/export_contract_snapshot.py"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert result.returncode == 0, stderr
+    snapshot = json.loads(result.stdout.decode("utf-8"))
+    assert snapshot["contract_version"] == "2026-08-05.v9"
+    assert "research_runs" in snapshot["database_tables"]
+    assert "report_versions" in snapshot["database_tables"]
+    assert snapshot["status_enums"]["research_execution"] == [
+        "planning", "queued", "collecting", "governing", "analyzing", "auditing",
+    ]
+    assert snapshot["status_enums"]["theme_candidate"] == [
+        "signal", "validating", "awaiting_confirmation", "confirmed", "merged", "rejected",
+    ]
+    assert snapshot["status_enums"]["sync_run"] == [
+        "queued", "running", "completed", "cancelled", "failed",
+    ]
+    assert snapshot["status_enums"]["discovery_run"] == [
+        "queued", "running", "completed", "failed",
+    ]
+    assert snapshot["status_enums"]["report_asset"] == [
+        "deep_research", "watch", "completed", "draft", "archived",
+    ]
+    assert snapshot["status_enums"]["connector_health"] == [
+        "healthy", "degraded", "disabled",
+    ]
+    assert {"GET", "/api/capabilities"} in [set(item) for item in snapshot["api_routes"]]
+    assert {"GET", "/api/reports/{report_id}/detail"} in [set(item) for item in snapshot["api_routes"]]
+    report_gateway = snapshot["frontend_gateway_dependencies"]["report-detail-gateway.ts"]
+    assert "/api/reports/{report_id}/detail" in report_gateway
+    research_gateway = snapshot["frontend_gateway_dependencies"]["research-workflow-gateway.ts"]
+    assert research_gateway == [
+        "/api/research-runs",
+        "/api/research-runs/{run_id}",
+        "/api/research-runs/{run_id}/cancel",
+        "/api/research-runs/{run_id}/finish",
+        "/api/research-runs/{run_id}/report-review",
+        "/api/research-runs/{run_id}/rerun",
+        "/api/research-runs/{run_id}/stream",
+        "/api/research-runs/{run_id}/theme-review",
+    ]
