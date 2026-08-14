@@ -14,6 +14,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 `conversations` 保存用户、已选主题和对话状态；`conversation_messages` 以 `(conversation_id, message_seq)` 排序，并以 `(conversation_id, idempotency_key)` 去重。用户消息、连续序号与对应交互 Goal 在一个短写事务内生成，数据库触发器拒绝消息 UPDATE/DELETE，后续总结只能追加版本化资产，不能改写历史输入。
 
+研究上下文构建器是纯确定性边界：先过滤私有记忆、跨对话摘要和知识片段的用户 ACL，再验证跨对话摘要是否位于当前对话的显式允许集合。通过权限门后，按主题定义、独立评分快照、压缩检查点、近期原始消息、已核验证据、冻结 ETF 快照、个人记忆、关联摘要、授权知识的顺序消费 token 预算。近期消息从最新序号向前保留，再恢复时间顺序；任一高信任层预算不足时停止选择后续低信任层。
+
 单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
 
 标准化事件在 ingest 事务中同步执行 `content-quality-v1` 完整性门。门只使用冻结原文和事件字段，检测空正文、标题式摘要、导航/页脚噪声比例、事件主体和动作；结果写入 `content_quality_results`。`publishable` 是首页证据、主题快照评分和正式研究选择的共同前置条件；`needs_enrichment` 与 `rejected` 继续保留原文和治理事件，供后续幂等重抽取，不以空成功覆盖。

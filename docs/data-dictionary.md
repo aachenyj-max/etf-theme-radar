@@ -45,6 +45,8 @@ Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued �
 
 研究消息写入与对应 Goal 创建位于同一 `BEGIN IMMEDIATE` 事务。`research_turn` 从 `queued` 首次领取后进入 `context_building`；领取查询排除已有同一 `conversation_id` 活跃 lease 的候选，但仍可领取其他对话。幂等重放返回原消息和原 Goal，不增加序号、不覆盖内容。
 
+上下文构建结果包含 `layers`、`estimated_tokens`、`token_budget`、`excluded_by_permission` 与 `truncated_layers`。`excluded_by_permission` 只记录各私有层的拒绝数量，不返回被拒绝对象的 ID 或内容；`truncated_layers` 记录预算关闭时被截断的层。输入项可携带预计算 `token_count`，缺失时使用确定性 JSON 长度估算，不能由模型自行扩大预算。
+
 内容质量状态固定为 `publishable`、`needs_enrichment`、`rejected`。缺失字段包括 `raw_text`、`title`、`summary`、`distinct_summary`、`event_subject`、`event_action` 与 `clean_body`；对应问题码用于审计和重抽取路由。没有质量记录不等于通过。
 
 结构化事实状态为 `audited` 或 `incomplete`。`numbers_json` 只保存冻结原文逐字出现的数字 token；`domain` 与 `industry_chain_position` 无明确证据时为 `unknown`，`occurred_at`、`subject`、`action`、`location` 无明确值时为空字符串。模型输出审计使用 evidence ID 隔离错误项。
