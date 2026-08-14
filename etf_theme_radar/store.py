@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS candidate_entities (candidate_id TEXT NOT NULL, entit
 CREATE TABLE IF NOT EXISTS candidate_aliases (candidate_id TEXT NOT NULL, alias TEXT NOT NULL, confirmed INTEGER DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(candidate_id,alias));
 CREATE TABLE IF NOT EXISTS discovery_runs (discovery_run_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, run_kind TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, window_start TEXT, window_end TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, result_json TEXT, error TEXT, lease_owner TEXT, lease_expires_at TEXT, heartbeat_at TEXT, attempt INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS source_watermarks (source_name TEXT PRIMARY KEY, watermark TEXT, cursor_json TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_goals (goal_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, goal_type TEXT NOT NULL, lane TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, priority INTEGER DEFAULT 0, payload_json TEXT NOT NULL, result_json TEXT NOT NULL, error TEXT NOT NULL, cancel_requested INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deadline_at TEXT, lease_owner TEXT NOT NULL, lease_expires_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, attempt INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS agent_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL, event_type TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, created_at TEXT NOT NULL, safe_summary TEXT NOT NULL, details_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS concurrency_leases (lease_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL UNIQUE, lane TEXT NOT NULL, owner TEXT NOT NULL, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL);
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -89,6 +92,27 @@ _INITIALIZED_DATABASES: set[str] = set()
 RESEARCH_EXECUTION_STATUSES = (
     "planning", "queued", "collecting", "governing", "analyzing", "auditing",
 )
+AGENT_GOAL_ACTIVE_STATUSES = (
+    "planning", "collecting", "extracting", "validating", "replanning",
+    "context_building", "answering", "quick_retrieval", "streaming",
+    "summarizing", "validating_coverage",
+)
+AGENT_GOAL_TERMINAL_STATUSES = (
+    "completed", "partial", "needs_attention", "rebuild_required", "cancelled",
+)
+AGENT_GOAL_TRANSITIONS = {
+    "planning": {"collecting", "extracting", "partial", "needs_attention", "cancelled"},
+    "collecting": {"validating", "partial", "needs_attention", "cancelled"},
+    "extracting": {"validating", "partial", "needs_attention", "cancelled"},
+    "validating": {"replanning", "completed", "partial", "needs_attention", "cancelled"},
+    "replanning": {"collecting", "extracting", "partial", "needs_attention", "cancelled"},
+    "context_building": {"answering", "quick_retrieval", "cancelled"},
+    "answering": {"streaming", "completed", "cancelled"},
+    "quick_retrieval": {"streaming", "completed", "cancelled"},
+    "streaming": {"completed", "cancelled"},
+    "summarizing": {"validating_coverage", "cancelled"},
+    "validating_coverage": {"completed", "rebuild_required", "cancelled"},
+}
 
 class EvidenceStore:
     def __init__(self, path: str | Path):
@@ -145,6 +169,10 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_runs_status ON discovery_runs(status, lease_expires_at, created_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_runs_worker ON sync_runs(status, lease_expires_at, created_at)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_idempotency ON sync_runs(idempotency_key) WHERE idempotency_key <> ''")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_goals_queue ON agent_goals(lane,status,priority DESC,created_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_goals_lease ON agent_goals(status,lease_expires_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_events_goal ON agent_events(goal_id,event_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_concurrency_leases_lane ON concurrency_leases(lane,expires_at)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -170,6 +198,253 @@ class EvidenceStore:
 
     def rollback(self) -> None:
         self.conn.rollback()
+
+    @staticmethod
+    def _agent_goal_from_row(row: tuple | None) -> dict | None:
+        if row is None:
+            return None
+        keys = (
+            "goal_id", "idempotency_key", "goal_type", "lane", "status", "stage",
+            "priority", "payload", "result", "error", "cancel_requested", "created_at",
+            "updated_at", "deadline_at", "lease_owner", "lease_expires_at",
+            "heartbeat_at", "attempt",
+        )
+        item = dict(zip(keys, row))
+        item["payload"] = json.loads(item["payload"] or "{}")
+        item["result"] = json.loads(item["result"] or "{}")
+        item["cancel_requested"] = bool(item["cancel_requested"])
+        return item
+
+    def _agent_goal_row(self, goal_id: str) -> tuple | None:
+        return self.conn.execute(
+            """SELECT goal_id,idempotency_key,goal_type,lane,status,stage,priority,
+            payload_json,result_json,error,cancel_requested,created_at,updated_at,deadline_at,
+            lease_owner,lease_expires_at,heartbeat_at,attempt FROM agent_goals WHERE goal_id=?""",
+            (goal_id,),
+        ).fetchone()
+
+    def _append_agent_event(
+        self, goal_id: str, event_type: str, from_status: str, to_status: str,
+        created_at: str, safe_summary: str = "", details: dict | None = None,
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO agent_events
+            (goal_id,event_type,from_status,to_status,created_at,safe_summary,details_json)
+            VALUES (?,?,?,?,?,?,?)""",
+            (goal_id, event_type, from_status, to_status, created_at, safe_summary,
+             json.dumps(details or {}, ensure_ascii=False)),
+        )
+
+    def create_agent_goal(
+        self, *, goal_id: str, idempotency_key: str, goal_type: str, lane: str,
+        payload: dict, created_at: str, priority: int = 0, deadline_at: str | None = None,
+    ) -> dict:
+        if lane not in {"interactive", "background"}:
+            raise ValueError(f"Unsupported agent goal lane: {lane}")
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO agent_goals
+            (goal_id,idempotency_key,goal_type,lane,status,stage,priority,payload_json,
+             result_json,error,cancel_requested,created_at,updated_at,deadline_at,
+             lease_owner,lease_expires_at,heartbeat_at,attempt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (goal_id, idempotency_key, goal_type, lane, "queued", "queued", priority,
+             json.dumps(payload, ensure_ascii=False), "{}", "", 0, created_at, created_at,
+             deadline_at, "", "", "", 1),
+        )
+        created = cursor.rowcount == 1
+        if created:
+            self._append_agent_event(goal_id, "created", "", "queued", created_at)
+        row = self.conn.execute(
+            """SELECT goal_id,idempotency_key,goal_type,lane,status,stage,priority,
+            payload_json,result_json,error,cancel_requested,created_at,updated_at,deadline_at,
+            lease_owner,lease_expires_at,heartbeat_at,attempt
+            FROM agent_goals WHERE idempotency_key=?""",
+            (idempotency_key,),
+        ).fetchone()
+        self.conn.commit()
+        item = self._agent_goal_from_row(row)
+        assert item is not None
+        if not created:
+            item["idempotent_replay"] = True
+        return item
+
+    def agent_goal(self, goal_id: str) -> dict | None:
+        return self._agent_goal_from_row(self._agent_goal_row(goal_id))
+
+    def agent_goal_events(self, goal_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT event_id,goal_id,event_type,from_status,to_status,created_at,
+            safe_summary,details_json FROM agent_events WHERE goal_id=? ORDER BY event_id""",
+            (goal_id,),
+        ).fetchall()
+        keys = ("event_id", "goal_id", "event_type", "from_status", "to_status", "created_at", "safe_summary", "details")
+        result = []
+        for row in rows:
+            item = dict(zip(keys, row))
+            item["details"] = json.loads(item["details"] or "{}")
+            result.append(item)
+        return result
+
+    def active_concurrency_leases(self, now: str, lane: str | None = None) -> list[dict]:
+        query = "SELECT lease_id,goal_id,lane,owner,acquired_at,heartbeat_at,expires_at FROM concurrency_leases WHERE expires_at>?"
+        params: tuple = (now,)
+        if lane is not None:
+            query += " AND lane=?"
+            params = (now, lane)
+        query += " ORDER BY acquired_at,lease_id"
+        keys = ("lease_id", "goal_id", "lane", "owner", "acquired_at", "heartbeat_at", "expires_at")
+        return [dict(zip(keys, row)) for row in self.conn.execute(query, params)]
+
+    def claim_next_agent_goal(
+        self, owner: str, lane: str, now: str, lease_expires_at: str, slot_limit: int,
+    ) -> dict | None:
+        if lane not in {"interactive", "background"}:
+            raise ValueError(f"Unsupported agent goal lane: {lane}")
+        if slot_limit < 1:
+            return None
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("DELETE FROM concurrency_leases WHERE expires_at<=?", (now,))
+            active = self.conn.execute(
+                "SELECT COUNT(*) FROM concurrency_leases WHERE lane=? AND expires_at>?",
+                (lane, now),
+            ).fetchone()[0]
+            if active >= slot_limit:
+                self.conn.commit()
+                return None
+            active_marks = ",".join("?" for _ in AGENT_GOAL_ACTIVE_STATUSES)
+            row = self.conn.execute(
+                f"""SELECT goal_id,status,attempt FROM agent_goals
+                WHERE lane=? AND cancel_requested=0 AND (
+                    status='queued' OR (status IN ({active_marks}) AND lease_expires_at<>'' AND lease_expires_at<=?)
+                ) ORDER BY priority DESC,created_at,goal_id LIMIT 1""",
+                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now),
+            ).fetchone()
+            if row is None:
+                self.conn.commit()
+                return None
+            goal_id, previous_status, attempt = row
+            recovered = previous_status != "queued"
+            next_status = previous_status if recovered else "planning"
+            next_attempt = attempt + 1 if recovered else attempt
+            self.conn.execute(
+                """UPDATE agent_goals SET status=?,stage=?,updated_at=?,lease_owner=?,
+                lease_expires_at=?,heartbeat_at=?,attempt=? WHERE goal_id=?""",
+                (next_status, next_status, now, owner, lease_expires_at, now, next_attempt, goal_id),
+            )
+            self.conn.execute(
+                """INSERT INTO concurrency_leases
+                (lease_id,goal_id,lane,owner,acquired_at,heartbeat_at,expires_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (goal_id, goal_id, lane, owner, now, now, lease_expires_at),
+            )
+            self._append_agent_event(
+                goal_id, "recovered" if recovered else "claimed", previous_status, next_status,
+                now, details={"owner": owner, "attempt": next_attempt},
+            )
+            self.conn.commit()
+            return self.agent_goal(goal_id)
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def heartbeat_agent_goal(
+        self, goal_id: str, owner: str, heartbeat_at: str, lease_expires_at: str,
+    ) -> bool:
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            updated_goal = self.conn.execute(
+                """UPDATE agent_goals SET heartbeat_at=?,lease_expires_at=?,updated_at=?
+                WHERE goal_id=? AND lease_owner=? AND status IN ({})""".format(
+                    ",".join("?" for _ in AGENT_GOAL_ACTIVE_STATUSES)
+                ),
+                (heartbeat_at, lease_expires_at, heartbeat_at, goal_id, owner, *AGENT_GOAL_ACTIVE_STATUSES),
+            ).rowcount
+            updated_lease = self.conn.execute(
+                """UPDATE concurrency_leases SET heartbeat_at=?,expires_at=?
+                WHERE goal_id=? AND owner=?""",
+                (heartbeat_at, lease_expires_at, goal_id, owner),
+            ).rowcount
+            if updated_goal != 1 or updated_lease != 1:
+                self.conn.rollback()
+                return False
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def request_agent_goal_cancel(self, goal_id: str, now: str, *, reason: str = "") -> dict | None:
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            row = self._agent_goal_row(goal_id)
+            item = self._agent_goal_from_row(row)
+            if item is None:
+                self.conn.commit()
+                return None
+            if item["status"] in AGENT_GOAL_TERMINAL_STATUSES:
+                self.conn.commit()
+                return item
+            if item["status"] == "queued":
+                self.conn.execute(
+                    """UPDATE agent_goals SET status='cancelled',stage='cancelled',
+                    cancel_requested=1,updated_at=? WHERE goal_id=?""",
+                    (now, goal_id),
+                )
+                self._append_agent_event(
+                    goal_id, "cancelled", "queued", "cancelled", now,
+                    safe_summary=reason, details={"reason": reason},
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE agent_goals SET cancel_requested=1,updated_at=? WHERE goal_id=?",
+                    (now, goal_id),
+                )
+                self._append_agent_event(
+                    goal_id, "cancel_requested", item["status"], item["status"], now,
+                    safe_summary=reason, details={"reason": reason},
+                )
+            self.conn.commit()
+            return self.agent_goal(goal_id)
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def transition_agent_goal(
+        self, goal_id: str, owner: str, to_status: str, now: str, *,
+        safe_summary: str = "", result: dict | None = None, error: str = "",
+    ) -> dict:
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            item = self._agent_goal_from_row(self._agent_goal_row(goal_id))
+            if item is None:
+                raise KeyError(goal_id)
+            if item["lease_owner"] != owner:
+                raise ValueError(f"Agent goal lease is not owned by {owner}")
+            allowed = AGENT_GOAL_TRANSITIONS.get(item["status"], set())
+            if to_status not in allowed:
+                raise ValueError(f"Invalid agent goal transition: {item['status']} -> {to_status}")
+            terminal = to_status in AGENT_GOAL_TERMINAL_STATUSES
+            self.conn.execute(
+                """UPDATE agent_goals SET status=?,stage=?,updated_at=?,result_json=?,error=?,
+                lease_owner=?,lease_expires_at=?,heartbeat_at=? WHERE goal_id=?""",
+                (to_status, to_status, now, json.dumps(result or item["result"], ensure_ascii=False),
+                 error, "" if terminal else owner, "" if terminal else item["lease_expires_at"],
+                 "" if terminal else item["heartbeat_at"], goal_id),
+            )
+            if terminal:
+                self.conn.execute("DELETE FROM concurrency_leases WHERE goal_id=?", (goal_id,))
+            self._append_agent_event(
+                goal_id, "transitioned", item["status"], to_status, now,
+                safe_summary=safe_summary,
+            )
+            self.conn.commit()
+            updated = self.agent_goal(goal_id)
+            assert updated is not None
+            return updated
+        except Exception:
+            self.conn.rollback()
+            raise
     def events(self) -> list[dict]:
         cols=[x[0] for x in self.conn.execute("SELECT * FROM normalized_events").description]; return [dict(zip(cols,row)) for row in self.conn.execute("SELECT * FROM normalized_events ORDER BY observed_at DESC")]
 

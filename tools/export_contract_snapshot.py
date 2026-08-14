@@ -12,7 +12,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from etf_theme_radar.api import CONTRACT_VERSION, STREAM_PAUSE_STATES, app
-from etf_theme_radar.store import EvidenceStore, RESEARCH_EXECUTION_STATUSES
+from etf_theme_radar.store import (
+    AGENT_GOAL_ACTIVE_STATUSES,
+    AGENT_GOAL_TERMINAL_STATUSES,
+    EvidenceStore,
+    RESEARCH_EXECUTION_STATUSES,
+)
 
 
 def _snake_case(value: str) -> str:
@@ -83,6 +88,10 @@ def build_snapshot() -> dict[str, object]:
         "status_enums": {
             "research_execution": list(RESEARCH_EXECUTION_STATUSES),
             "research_stream_pause": sorted(STREAM_PAUSE_STATES),
+            "agent_goal": {
+                "active": list(AGENT_GOAL_ACTIVE_STATUSES),
+                "terminal": list(AGENT_GOAL_TERMINAL_STATUSES),
+            },
             "theme_candidate": [
                 "signal", "validating", "awaiting_confirmation",
                 "confirmed", "merged", "rejected",

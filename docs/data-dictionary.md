@@ -21,6 +21,9 @@
 | `citations` | 建立结论、事件与原始证据之间的引用关系。 |
 | `product_proposals` | 保存仅供人工复核的产品草案。 |
 | `research_runs` | 保存活动、等待和历史任务；状态、阶段、进度、lease 与队列位置均持久化。 |
+| `agent_goals` | 三 Agent 共用的持久目标；保存幂等键、类型、lane、状态/阶段、优先级、输入/结果、取消标志、deadline、lease、heartbeat 和 attempt。 |
+| `agent_events` | Goal 的只追加安全审计事件；保存前后状态、事件类型、时间、安全摘要和结构化详情，不保存隐藏思维链。 |
+| `concurrency_leases` | 单 Worker 内交互/后台并发槽占用；以 Goal 唯一绑定 owner、lane、获取时间、heartbeat 和过期时间。 |
 | `etf_market_snapshots` | 保存报告旁的独立动态 ETF 行情快照及 stale-if-error 状态。 |
 | `etf_preview_snapshots` | 保存天天基金产品目录、费率、规模、复权收益、申购状态及场内溢价/成交额的独立快照。 |
 | `report_assets` / `report_versions` | 每个已确认主题保存一条主报告资产及其经用户核实的不可变版本；版本 payload 冻结 `conclusion`、`report_sections`、审计和引用。 |
@@ -29,6 +32,8 @@
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |
 
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
+
+Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued → planning → collecting/extracting → validating → replanning（可选） → completed/partial/needs_attention`；排队取消直接进入 `cancelled`，活动取消先置 `cancel_requested`，再由 lease owner 确认终止。过期活动 lease 可被新 owner 原阶段恢复，`attempt` 增加且追加 `recovered` 事件。
 
 所有关键表应在适用时包含 `created_at`、`updated_at`、`source`、`provenance`、`parser_version`、`confidence` 和 `content_hash`，避免无法解释的结论或未来数据泄漏。
 

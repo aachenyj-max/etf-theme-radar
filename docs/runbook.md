@@ -28,7 +28,9 @@
 
 Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6 次模型请求、12 次工具调用和 480 秒，自动同时覆盖产业动量与 ETF 格局；来源优先级为现有证据/缓存、官方 ETF 持仓、天天基金快照、yfinance，再按缺口补学术、招聘、专利线索和反方检索。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
 
-通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。通过 `GET /api/research-runs/{run_id}` 查看 `agent_runs` 与 `tool_calls`。响应不会包含 API key 或模型隐藏推理内容。
+通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v10` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看 `agent_runs` 与 `tool_calls`。响应不会包含 API key 或模型隐藏推理内容。
+
+Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`agent_events` 是只追加安全审计，`concurrency_leases` 是可过期槽位。遇到 429/503 时本地有效并发减半，冷却后逐槽恢复；不要通过增加 API/Worker 实例规避限速。Worker 重启后等待 lease 过期即可由新 owner 恢复，禁止人工直接改表抢占仍有效的 lease。
 
 所有产品材料仅为内部研究草案。使用前必须经过基金法务、合规、指数、AP/做市商和交易所上市团队复核。系统不提供投资、法律、税务或合规意见，也不执行任何交易。
 
@@ -60,6 +62,7 @@ python -m etf_theme_radar.cli etf-preview-audit --db data/radar.db
 - 外部请求失败：保留错误记录，使用缓存或 fixture 验证流程，不得伪造抓取结果。
 - ETF 行情刷新长期排队：检查是否存在 `report-refresh:*` 任务和 Worker heartbeat；刷新任务应在当前阶段释放 lease 后优先领取。单次最多 6 只、逐 ticker 8 秒，空响应记为失败；报告详情表会显示逐只错误，只有非空的历史缓存才能作为 stale 快照回退。
 - `blocked_configuration`：检查 key、账户权限、`LLM_BASE_URL` 和 V4 模型名，修复后重新运行任务。
+- Agent Goal 长期停留在活动状态：检查 `lease_expires_at`、`heartbeat_at`、对应 `concurrency_leases.owner` 和 Worker 心跳；只有 lease 已过期才应由重启 Worker 恢复。执行中取消是协作式的，会在下一个安全边界变为 `cancelled`。
 - 冷启动超过 90 秒：v6 启动器会继续等待到 180 秒；若仍失败，读取 `data/logs/api-error.log` 与 `frontend-error.log`，不得改用其他端口绕过。
 ## 历史证据摘要升级
 

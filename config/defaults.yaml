@@ -29,6 +29,12 @@ agent_runtime:
   max_cost_usd: 0.50
   estimated_cost_per_million_tokens: 2.00
   consecutive_no_evidence_limit: 2
+agent_concurrency:
+  total_limit: 12
+  interactive_reserved: 10
+  background_reserved: 2
+  minimum_total: 2
+  cooldown_seconds: 30
 etf_market:
   minimum_verified_etfs: 2
   max_products_per_snapshot: 6

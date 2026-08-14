@@ -32,7 +32,10 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-05.v9"
+        assert payload["service"]["contract_version"] == "2026-08-14.v10"
+        assert payload["llm"]["concurrency"]["lane_reservations"] == {
+            "interactive": 10, "background": 2,
+        }
         assert payload["worker"]["alive"] is True and payload["worker"]["heartbeat_at"]
         assert payload["sync_discovery_worker"]["alive"] is True
         assert payload["source_coverage"] == {"ready": 7, "total": 8, "label": "7/8", "excluded": ["patentsview"]}
@@ -146,9 +149,19 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-05.v9"
+    assert snapshot["contract_version"] == "2026-08-14.v10"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
+    assert snapshot["status_enums"]["agent_goal"] == {
+        "active": [
+            "planning", "collecting", "extracting", "validating", "replanning",
+            "context_building", "answering", "quick_retrieval", "streaming",
+            "summarizing", "validating_coverage",
+        ],
+        "terminal": [
+            "completed", "partial", "needs_attention", "rebuild_required", "cancelled",
+        ],
+    }
     assert snapshot["status_enums"]["research_execution"] == [
         "planning", "queued", "collecting", "governing", "analyzing", "auditing",
     ]

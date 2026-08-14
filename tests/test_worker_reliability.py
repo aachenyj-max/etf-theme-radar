@@ -139,6 +139,40 @@ def test_stale_agent_audit_is_closed_before_recovery(tmp_path: Path) -> None:
     store.close()
 
 
+def test_expired_agent_goal_is_recovered_after_worker_restart(tmp_path: Path) -> None:
+    database = tmp_path / "goal-recovery.db"
+    first = EvidenceStore(database)
+    first.create_agent_goal(
+        goal_id="goal-restart",
+        idempotency_key="restart:goal",
+        goal_type="information_collection",
+        lane="background",
+        payload={"theme_id": "robotics"},
+        created_at="2026-08-14T00:00:00+00:00",
+    )
+    claimed = first.claim_next_agent_goal(
+        "worker-before-restart", "background", "2026-08-14T00:00:01+00:00",
+        "2026-08-14T00:00:10+00:00", 2,
+    )
+    assert claimed and claimed["attempt"] == 1
+    first.close()
+
+    restarted = EvidenceStore(database)
+    recovered = restarted.claim_next_agent_goal(
+        "worker-after-restart", "background", "2026-08-14T00:00:11+00:00",
+        "2026-08-14T00:01:11+00:00", 2,
+    )
+
+    assert recovered and recovered["goal_id"] == "goal-restart"
+    assert recovered["status"] == "planning"
+    assert recovered["attempt"] == 2
+    assert recovered["lease_owner"] == "worker-after-restart"
+    assert [event["event_type"] for event in restarted.agent_goal_events("goal-restart")] == [
+        "created", "claimed", "recovered"
+    ]
+    restarted.close()
+
+
 def test_custom_database_path_is_resolved_from_registry(tmp_path: Path, monkeypatch) -> None:
     control = tmp_path / "control.db"
     custom = tmp_path / "custom.db"

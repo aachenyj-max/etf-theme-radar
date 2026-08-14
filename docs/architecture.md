@@ -10,6 +10,10 @@
 
 Workflow 持有阶段、审批、取消、恢复、预算和最终状态；PydanticAI Agent 只在采集阶段选择注册工具、判断证据缺口并提交停止理由。模型不能直接执行 SQL、写文件、修改状态或决定确定性评分。`agent_runs` 保存模型、prompt 哈希、用量和停止原因，`tool_calls` 保存参数/结果摘要、延迟、重试和证据增量。隐藏思维链不持久化；中断后从证据账本和工具摘要开始新的 attempt。
 
+三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。queued Goal 首次领取进入 planning，活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt；heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
+
+单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露，契约版本为 `2026-08-14.v10`。
+
 普通主题研究由 SQLite 原子队列限制为一个执行槽，并维护按 `queue_position` 排序的 FIFO 多任务等待队列。`awaiting_*`、`returned` 与 `blocked_configuration` 属于独立人工处理状态，不占执行槽；执行项进入人工处理或终态后，在同一写事务中提升最早等待项。主题审核通过和退回任务重跑先追加到等待队列，只有排到队首且执行槽空闲时才恢复对应阶段。Worker 重启时会先提升遗留等待项，且不会并行领取两个普通研究任务。
 
 主题搜索在研究立项之前运行。`SyncDiscoveryWorker` 以 SQLite lease 串行领取来源同步任务，结束后对观察窗口内尚未分配的证据执行确定性词项/实体聚类。候选只在达到配置化可信度门槛后参与排序，状态依次为 `signal`、`validating`、`awaiting_confirmation`；人工确认或合并后才写入正式主题本体。DeepSeek 可在后续深研中解释证据与补缺口，但不能绕过此状态机。
@@ -31,12 +35,14 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 公共契约版本：`2026-08-05.v9`；`/health` 与 `/api/capabilities` 必须报告相同版本。本任务未新增或改变公共 API，因此不提升版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。阶段 1 / 任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency`，当前版本提升为 `2026-08-14.v10`；`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
 
 当前应用表共 31 张；SQLite 内部的 `sqlite_*` 表不计入契约：
+
+这是阶段 0 的冻结表面。任务 1.1 当前应用表增加至 34 张，新增 `agent_goals`、`agent_events`、`concurrency_leases`；原 31 张表保持兼容。
 
 | 领域 | 表 |
 |---|---|

@@ -20,6 +20,7 @@ from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from .browser_mcp import fetch_public_page
+from .agent_goals import GoalConcurrencyPolicy
 from .connector_factory import configured_connectors, load_project_env
 from .governance import classify
 from .models import NormalizedEvent, RawDocument, utcnow
@@ -554,6 +555,7 @@ def analysis_llm_config() -> dict[str, str] | None:
 
 def capability_status() -> dict[str, Any]:
     config = model_config()
+    concurrency = GoalConcurrencyPolicy.from_defaults()
     return {
         "configured": config.configured,
         "provider": config.provider,
@@ -561,5 +563,15 @@ def capability_status() -> dict[str, Any]:
         "analysis_model": config.analysis_model,
         "framework": "pydantic-ai",
         "autonomy": "stage_bounded",
+        "concurrency": {
+            "total_limit": concurrency.total_limit,
+            "lane_reservations": {
+                "interactive": concurrency.interactive_reserved,
+                "background": concurrency.background_reserved,
+            },
+            "minimum_total": concurrency.minimum_total,
+            "cooldown_seconds": concurrency.cooldown_seconds,
+            "pressure_status_codes": [429, 503],
+        },
         "tools": ["query_existing_evidence", "inspect_source_health", "collect_from_source", "search_public_web", "browse_public_page", "discover_global_etfs", "summarize_evidence_gap", "finish_research"],
     }

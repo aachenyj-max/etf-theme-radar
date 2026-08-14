@@ -78,6 +78,21 @@ def test_capability_status_never_exposes_key(monkeypatch) -> None:
     assert "not-for-output" not in str(status)
 
 
+def test_capability_status_exposes_bounded_agent_concurrency_without_runtime_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "not-for-output")
+
+    status = capability_status()
+
+    assert status["concurrency"] == {
+        "total_limit": 12,
+        "lane_reservations": {"interactive": 10, "background": 2},
+        "minimum_total": 2,
+        "cooldown_seconds": 30,
+        "pressure_status_codes": [429, 503],
+    }
+    assert "not-for-output" not in str(status["concurrency"])
+
+
 def test_no_evidence_guard_is_audited_and_allows_counter_call(tmp_path: Path) -> None:
     store = EvidenceStore(tmp_path / "guard.db")
     store.create_research_run("guard-run", "collecting", "2026-07-29T00:00:00Z", {"topic": "AI", "sources": ["arxiv"]})
