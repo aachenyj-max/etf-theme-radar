@@ -390,7 +390,7 @@ flowchart LR
 - [x] **任务 0.2：记录基准数据质量与刷新失败样本**
   - 为标题等于摘要、持仓导航噪声、AIQ/WTAI 限速和空快照拒写建立脱敏 fixture。
   - 运行：`python -m pytest tests/test_evidence_summaries.py tests/test_etf_market.py -q`。
-- [ ] **任务 0.3：提交基线**
+- [x] **任务 0.3：提交基线**
   - 提交信息：`test: freeze agent redesign baseline`。
 
 **阶段验收：** 无生产表被破坏；现有测试通过；已记录当前失败样本，后续修复可回归。
@@ -601,3 +601,4 @@ flowchart LR
 |---|---|---|---|---|
 | 2026-08-14 | 阶段 0 / 任务 0.1 | `3b294e6` | `python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`：8 passed；`python -m pytest -q`：98 passed | 无；契约版本未改变，任务 0.2 尚未开始 |
 | 2026-08-14 | 阶段 0 / 任务 0.2 | `a8974fd` | `python -m pytest tests/test_evidence_summaries.py tests/test_etf_market.py -q`：18 passed；`python -m pytest -q`：101 passed | 标题式摘要和持仓导航噪声仅完成基线冻结，留待阶段 1 修复；任务 0.3 尚未开始 |
+| 2026-08-14 | 阶段 0 / 任务 0.3 | `ac958be` | 0.1 回归：8 passed；0.2 回归：18 passed；`python -m pytest -q`：101 passed；契约导出：31 张表、`2026-08-05.v9` | 阶段 0 验收通过；阶段 1 尚未开始 |
