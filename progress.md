@@ -453,7 +453,7 @@ flowchart LR
   - 将本规格提示词保存为版本化模板；实现 `answer_now`、`quick_retrieve`、`background_research` 的确定性路由与停止条件。
   - 创建后台 Goal 后先返回阶段性答案；只引用输入 ID。
   - 运行：`python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`（若后一个文件尚不存在，则在本任务创建对应测试）。
-- [ ] **任务 2.4：实现持久化 SSE 审计流**
+- [x] **任务 2.4：实现持久化 SSE 审计流**
   - 增量传输动作状态、耗时、来源数、工具安全摘要、证据有效增量和回答片段；断线回退轮询。
   - 运行 API 契约测试和 `frontend/e2e/research-review.spec.ts`。
 - [ ] **任务 2.5：实现总结版本、记忆变更和压缩检查点**
@@ -612,3 +612,4 @@ flowchart LR
 | 2026-08-14 | 阶段 2 / 任务 2.1 | `6a78939` | RED：新模块缺失、同对话第二项被错误领取；`python -m pytest tests/test_conversations.py tests/test_research_queue.py -q`：7 passed；扩展回归：23 passed；`python -m pytest -q`：142 passed；契约导出：40 张表、`2026-08-14.v13`；隔离验证首次启动、健康复用、端口占用失败三路径通过 | 无；不可变消息、API 幂等重放和同对话串行已落地，任务 2.2 尚未开始 |
 | 2026-08-14 | 阶段 2 / 任务 2.2 | `11fdf80` | RED：`context_builder` 模块缺失；`python -m pytest tests/test_context_builder.py tests/test_ontology_and_security.py -q`：6 passed；`python -m pytest -q`：144 passed；契约保持 40 张表、`2026-08-14.v13` | 无；权限先于预算、固定信任层级、最新消息保留和显式跨对话集合已覆盖，任务 2.3 尚未开始 |
 | 2026-08-14 | 阶段 2 / 任务 2.3 | `bd31a24` | RED：三模式路由、后台 Goal 与引用校验接口缺失；`python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`：9 passed；`python -m pytest -q`：149 passed；契约保持 40 张表、`2026-08-14.v13` | 无；研究 Agent v1 提示词、确定性三模式、quick 停止条件、阶段性回答优先与引用白名单已落地，任务 2.4 尚未开始 |
+| 2026-08-14 | 阶段 2 / 任务 2.4 | `5cddb6d` | RED：`conversation_event_stream` 缺失；API/对话回归：8 passed；`npm.cmd run test:e2e -- research-review.spec.ts`：5 passed；`python -m pytest -q`：151 passed；契约导出：40 张表、`2026-08-14.v14`；隔离验证首次启动、健康复用、端口占用失败三路径通过 | 无；动作状态、工具安全摘要、证据有效增量与回答片段均持久化并支持游标续传，任务 2.5 尚未开始 |
