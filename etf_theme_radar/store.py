@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS concurrency_leases (lease_id TEXT PRIMARY KEY, goal_i
 CREATE TABLE IF NOT EXISTS content_quality_results (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, missing_fields_json TEXT NOT NULL, issues_json TEXT NOT NULL, metrics_json TEXT NOT NULL, evaluated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS extracted_facts (event_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, status TEXT NOT NULL, subject TEXT NOT NULL, occurred_at TEXT NOT NULL, action TEXT NOT NULL, numbers_json TEXT NOT NULL, domain TEXT NOT NULL, location TEXT NOT NULL, industry_chain_position TEXT NOT NULL, audit_errors_json TEXT NOT NULL, extracted_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS extraction_exceptions (exception_id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, content_hash TEXT NOT NULL, parser_version TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, error TEXT NOT NULL, attempt INTEGER DEFAULT 1, first_failed_at TEXT NOT NULL, last_failed_at TEXT NOT NULL, resolved_at TEXT NOT NULL, UNIQUE(event_id,parser_version,stage));
+CREATE TABLE IF NOT EXISTS conversations (conversation_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, selected_theme_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS conversation_messages (message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, idempotency_key TEXT NOT NULL, goal_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, UNIQUE(conversation_id,message_seq), UNIQUE(conversation_id,idempotency_key));
+CREATE TRIGGER IF NOT EXISTS conversation_messages_no_update BEFORE UPDATE ON conversation_messages BEGIN SELECT RAISE(ABORT, 'conversation_messages are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS conversation_messages_no_delete BEFORE DELETE ON conversation_messages BEGIN SELECT RAISE(ABORT, 'conversation_messages are immutable'); END;
 '''
 EVENT_COLUMNS = [
     "event_id", "source", "source_url", "source_type", "title", "summary", "published_at", "observed_at", "themes", "companies", "tickers", "source_quality", "extraction_confidence", "raw_content_hash",
@@ -180,6 +184,8 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_quality_status ON content_quality_results(status,evaluated_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extracted_facts_status ON extracted_facts(status,extracted_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extraction_exceptions_status ON extraction_exceptions(status,last_failed_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id,updated_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_messages_order ON conversation_messages(conversation_id,message_seq)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -205,6 +211,140 @@ class EvidenceStore:
 
     def rollback(self) -> None:
         self.conn.rollback()
+
+    def create_conversation(
+        self, *, conversation_id: str, user_id: str, selected_theme_id: str,
+        title: str, created_at: str,
+    ) -> dict:
+        self.conn.execute(
+            """INSERT INTO conversations
+            (conversation_id,user_id,selected_theme_id,title,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?)""",
+            (conversation_id, user_id, selected_theme_id, title, "active", created_at, created_at),
+        )
+        self.conn.commit()
+        item = self.conversation(conversation_id, user_id)
+        assert item is not None
+        return item
+
+    def conversation(self, conversation_id: str, user_id: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT conversation_id,user_id,selected_theme_id,title,status,created_at,updated_at
+            FROM conversations WHERE conversation_id=? AND user_id=?""",
+            (conversation_id, user_id),
+        ).fetchone()
+        keys = (
+            "conversation_id", "user_id", "selected_theme_id", "title", "status",
+            "created_at", "updated_at",
+        )
+        return dict(zip(keys, row)) if row else None
+
+    def conversations(self, user_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT conversation_id,user_id,selected_theme_id,title,status,created_at,updated_at
+            FROM conversations WHERE user_id=? ORDER BY updated_at DESC,conversation_id""",
+            (user_id,),
+        ).fetchall()
+        keys = (
+            "conversation_id", "user_id", "selected_theme_id", "title", "status",
+            "created_at", "updated_at",
+        )
+        return [dict(zip(keys, row)) for row in rows]
+
+    @staticmethod
+    def _conversation_message_from_row(row: tuple | None) -> dict | None:
+        if row is None:
+            return None
+        keys = (
+            "message_id", "conversation_id", "message_seq", "role", "content",
+            "idempotency_key", "goal_id", "created_at",
+        )
+        return dict(zip(keys, row))
+
+    def conversation_messages(self, conversation_id: str, user_id: str) -> list[dict]:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        rows = self.conn.execute(
+            """SELECT message_id,conversation_id,message_seq,role,content,idempotency_key,
+            goal_id,created_at FROM conversation_messages WHERE conversation_id=?
+            ORDER BY message_seq""",
+            (conversation_id,),
+        ).fetchall()
+        return [self._conversation_message_from_row(row) for row in rows if row is not None]
+
+    def append_user_conversation_message(
+        self, *, conversation_id: str, user_id: str, message_id: str, goal_id: str,
+        idempotency_key: str, content: str, created_at: str,
+    ) -> dict:
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            conversation = self.conn.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id=? AND user_id=?",
+                (conversation_id, user_id),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(conversation_id)
+            existing = self.conn.execute(
+                """SELECT message_id,conversation_id,message_seq,role,content,idempotency_key,
+                goal_id,created_at FROM conversation_messages
+                WHERE conversation_id=? AND idempotency_key=?""",
+                (conversation_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                self.conn.commit()
+                message = self._conversation_message_from_row(existing)
+                assert message is not None
+                goal = self.agent_goal(message["goal_id"])
+                assert goal is not None
+                return {"message": message, "goal": goal, "idempotent_replay": True}
+            message_seq = int(self.conn.execute(
+                "SELECT COALESCE(MAX(message_seq),0)+1 FROM conversation_messages WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()[0])
+            payload = {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "message_seq": message_seq,
+                "selected_theme_id": self.conn.execute(
+                    "SELECT selected_theme_id FROM conversations WHERE conversation_id=?",
+                    (conversation_id,),
+                ).fetchone()[0],
+            }
+            goal_key = f"conversation:{conversation_id}:{idempotency_key}"
+            self.conn.execute(
+                """INSERT INTO agent_goals
+                (goal_id,idempotency_key,goal_type,lane,status,stage,priority,payload_json,
+                 result_json,error,cancel_requested,created_at,updated_at,deadline_at,
+                 lease_owner,lease_expires_at,heartbeat_at,attempt)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (goal_id, goal_key, "research_turn", "interactive", "queued", "queued", 0,
+                 json.dumps(payload, ensure_ascii=False), "{}", "", 0, created_at, created_at,
+                 None, "", "", "", 1),
+            )
+            self._append_agent_event(goal_id, "created", "", "queued", created_at)
+            self.conn.execute(
+                """INSERT INTO conversation_messages
+                (message_id,conversation_id,message_seq,role,content,idempotency_key,goal_id,created_at)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (message_id, conversation_id, message_seq, "user", content,
+                 idempotency_key, goal_id, created_at),
+            )
+            self.conn.execute(
+                "UPDATE conversations SET updated_at=? WHERE conversation_id=?",
+                (created_at, conversation_id),
+            )
+            self.conn.commit()
+            message = self._conversation_message_from_row(self.conn.execute(
+                """SELECT message_id,conversation_id,message_seq,role,content,idempotency_key,
+                goal_id,created_at FROM conversation_messages WHERE message_id=?""",
+                (message_id,),
+            ).fetchone())
+            goal = self.agent_goal(goal_id)
+            assert message is not None and goal is not None
+            return {"message": message, "goal": goal, "idempotent_replay": False}
+        except Exception:
+            self.conn.rollback()
+            raise
 
     @staticmethod
     def _agent_goal_from_row(row: tuple | None) -> dict | None:
@@ -321,18 +461,29 @@ class EvidenceStore:
                 return None
             active_marks = ",".join("?" for _ in AGENT_GOAL_ACTIVE_STATUSES)
             row = self.conn.execute(
-                f"""SELECT goal_id,status,attempt FROM agent_goals
+                f"""SELECT goal_id,status,attempt,goal_type FROM agent_goals AS candidate
                 WHERE lane=? AND cancel_requested=0 AND (
                     status='queued' OR (status IN ({active_marks}) AND lease_expires_at<>'' AND lease_expires_at<=?)
+                ) AND (
+                    json_extract(candidate.payload_json,'$.conversation_id') IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1 FROM concurrency_leases AS active_lease
+                        JOIN agent_goals AS active_goal ON active_goal.goal_id=active_lease.goal_id
+                        WHERE active_lease.lane=candidate.lane AND active_lease.expires_at>?
+                          AND json_extract(active_goal.payload_json,'$.conversation_id')=
+                              json_extract(candidate.payload_json,'$.conversation_id')
+                    )
                 ) ORDER BY priority DESC,created_at,goal_id LIMIT 1""",
-                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now),
+                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now, now),
             ).fetchone()
             if row is None:
                 self.conn.commit()
                 return None
-            goal_id, previous_status, attempt = row
+            goal_id, previous_status, attempt, goal_type = row
             recovered = previous_status != "queued"
-            next_status = previous_status if recovered else "planning"
+            next_status = previous_status if recovered else (
+                "context_building" if goal_type == "research_turn" else "planning"
+            )
             next_attempt = attempt + 1 if recovered else attempt
             self.conn.execute(
                 """UPDATE agent_goals SET status=?,stage=?,updated_at=?,lease_owner=?,

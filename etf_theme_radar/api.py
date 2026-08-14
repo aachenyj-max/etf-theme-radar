@@ -18,6 +18,7 @@ from .worker import stop_all_workers, worker_for, worker_status
 from .sync_worker import stop_all_sync_workers, sync_worker_for, sync_worker_status
 from .governance import reclassify_store
 from .agent_runtime import capability_status
+from .conversations import ConversationService
 from .ontology import refresh_research_assets
 from . import internal_auth
 
@@ -50,7 +51,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-14.v12"
+CONTRACT_VERSION = "2026-08-14.v13"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -100,6 +101,15 @@ class ThemeCandidateReviewRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=256)
+class ConversationCreateRequest(BaseModel):
+    selected_theme_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(default="", max_length=200)
+class ConversationMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20_000)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+def _request_user_id(request: Request) -> str:
+    return str(getattr(request.state, "internal_username", "local"))
 
 def _is_public_auth_path(path: str) -> bool:
     return path in {"/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
@@ -148,6 +158,67 @@ def auth_logout(response: Response):
 
 @app.get("/health")
 def health(): return {"status":"ok","trading":"disabled","service_id":SERVICE_ID,"contract_version":CONTRACT_VERSION}
+
+@app.post("/api/conversations", status_code=201)
+def create_conversation(request: Request, payload: ConversationCreateRequest):
+    store = _store()
+    try:
+        return ConversationService(store).create_conversation(
+            conversation_id=str(uuid4()),
+            user_id=_request_user_id(request),
+            selected_theme_id=payload.selected_theme_id,
+            title=payload.title,
+            created_at=utcnow(),
+        )
+    finally:
+        store.close()
+
+@app.get("/api/conversations")
+def list_conversations(request: Request):
+    store = _store()
+    try:
+        return {"conversations": store.conversations(_request_user_id(request))}
+    finally:
+        store.close()
+
+@app.post("/api/conversations/{conversation_id}/messages", status_code=202)
+def append_conversation_message(
+    conversation_id: str, payload: ConversationMessageRequest,
+    request: Request, response: Response,
+):
+    store = _store()
+    try:
+        try:
+            result = ConversationService(store).append_user_message(
+                conversation_id=conversation_id,
+                user_id=_request_user_id(request),
+                message_id=str(uuid4()),
+                goal_id=str(uuid4()),
+                idempotency_key=payload.idempotency_key,
+                content=payload.content,
+                created_at=utcnow(),
+            )
+        except KeyError:
+            raise HTTPException(404, "研究对话不存在")
+    finally:
+        store.close()
+    if result["idempotent_replay"]:
+        response.status_code = 200
+    return result
+
+@app.get("/api/conversations/{conversation_id}/messages")
+def list_conversation_messages(conversation_id: str, request: Request):
+    store = _store()
+    try:
+        try:
+            messages = ConversationService(store).messages(
+                conversation_id, _request_user_id(request)
+            )
+        except KeyError:
+            raise HTTPException(404, "研究对话不存在")
+        return {"conversation_id": conversation_id, "messages": messages}
+    finally:
+        store.close()
 @app.get("/api/connectors/health")
 def connector_health(): return [h.__dict__ for h in (c.healthcheck() for c in configured_connectors(Path("data/cache")))]
 @app.get("/api/capabilities")

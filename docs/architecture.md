@@ -10,7 +10,9 @@
 
 Workflow 持有阶段、审批、取消、恢复、预算和最终状态；PydanticAI Agent 只在采集阶段选择注册工具、判断证据缺口并提交停止理由。模型不能直接执行 SQL、写文件、修改状态或决定确定性评分。`agent_runs` 保存模型、prompt 哈希、用量和停止原因，`tool_calls` 保存参数/结果摘要、延迟、重试和证据增量。隐藏思维链不持久化；中断后从证据账本和工具摘要开始新的 attempt。
 
-三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。queued Goal 首次领取进入 planning，活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt；heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
+三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。普通 queued Goal 首次领取进入 planning，`research_turn` 首次领取进入 context_building；活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt。领取交互 Goal 时会跳过已有未过期 lease 的同一 `conversation_id`，但继续选择其他对话，因此保证对话内串行而不把整个交互 lane 降为单槽。heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
+
+`conversations` 保存用户、已选主题和对话状态；`conversation_messages` 以 `(conversation_id, message_seq)` 排序，并以 `(conversation_id, idempotency_key)` 去重。用户消息、连续序号与对应交互 Goal 在一个短写事务内生成，数据库触发器拒绝消息 UPDATE/DELETE，后续总结只能追加版本化资产，不能改写历史输入。
 
 单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
 
@@ -41,7 +43,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 `2026-08-14.v12`。`/health` 与 `/api/capabilities` 必须报告相同版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 v12；任务 2.1 因新增多对话与不可变消息路由提升为 `2026-08-14.v13`。`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
@@ -57,6 +59,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 任务 1.4 当前应用表增加至 37 张，新增 `extraction_exceptions`；公开 API 形状未变化，契约版本保持 `2026-08-14.v11`。
 
 任务 1.6 当前应用表增加至 38 张，新增 `independent_score_snapshots`；研究结果新增三个独立评分维度，契约版本提升为 `2026-08-14.v12`。三个维度仅共享主题和运行范围，不计算跨维度综合分。
+
+任务 2.1 当前应用表增加至 40 张，新增 `conversations` 与 `conversation_messages`；公开契约提升为 `2026-08-14.v13`。旧 `research_runs` 单执行槽继续用于普通主题研究，新的 `research_turn` 使用交互 lane 并按 `conversation_id` 串行。
 
 阶段 1 的治理顺序固定为：持久 Goal 领取与 lease 隔离 → 原文完整性评估 → 逐条事实抽取审计 → 研究/刷新边界 → 独立评分持久化。历史回填复用同一质量与抽取函数，并以内容哈希、解析版本和恢复点保证幂等；任何下游报告都不能把未通过质量门、不可比 ETF 字段或 `not_assessed` 维度转换成肯定结论。
 
@@ -95,6 +99,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 |---|---|
 | 健康与能力 | `GET /health`；`GET /api/capabilities`；`GET /api/connectors/health` |
 | 认证 | `GET /api/auth/session`；`POST /api/auth/login`；`POST /api/auth/logout` |
+| 研究对话 | `GET/POST /api/conversations`；`GET/POST /api/conversations/{conversation_id}/messages` |
 | ETF 预览 | `GET /api/etf-preview`；`POST /api/etf-preview/refresh` |
 | 采集同步 | `POST /api/pipeline/run`；`POST /api/sync`；`GET/POST /api/sync-runs`；`GET /api/sync-runs/{sync_run_id}`；`POST /api/sync-runs/{sync_run_id}/cancel` |
 | 证据 | `GET /api/evidence`；`GET /api/evidence/facets`；`GET /api/evidence/{evidence_id}` |

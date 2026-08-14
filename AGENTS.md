@@ -61,6 +61,7 @@ Windows 双击启动器只允许 API 端口 8001 和前端端口 3000，不得�
 - 静态 ETF 竞品配置只作为优先缓存。已授权 ETF 行情且核验候选低于 `config/defaults.yaml` 门槛时，允许 DeepSeek 使用独立、受审计的公开 ETF 搜索工具发现全球候选；只有发行人/交易所官方 HTTPS 页面、交易所、上市市场、币种和 Yahoo symbol 均通过确定性校验的 ETF 才能进入报告快照。动态结果不得自动写回全局配置。
 - 研究任务与来源同步/主题发现分别由单进程持久 Worker 通过 SQLite lease 领取；API 只创建任务或执行原子状态操作。新增阶段必须支持幂等键、heartbeat、阶段级恢复和取消竞态测试，不得恢复“每个请求启动一个 Thread”的执行方式。
 - 信息、研究与总结 Agent 新任务统一写入 `agent_goals`，状态变化逐条追加 `agent_events`，执行占用写入 `concurrency_leases`。默认并发上限、交互/后台预留、最低降载值和冷却时间来自 `config/defaults.yaml`；429/503 只允许有界降载与冷却后逐步恢复，不得绕过 lane 预留或无限重试。
+- 研究消息必须写入不可变 `conversation_messages`，以 `conversation_id + idempotency_key` 去重并分配连续 `message_seq`；消息和对应 `research_turn` Goal 必须在同一 SQLite 短事务创建。领取交互 Goal 时，同一 `conversation_id` 只允许一个未过期 lease，不同对话可占用不同交互槽；不得通过更新、删除旧消息或全局串行化掩盖顺序问题。
 - 同步采集和批量治理不得长期持有 SQLite 写事务；瞬时 `database is locked` 必须退避重试且不得终止持久 Worker 或 heartbeat 线程。前端来源覆盖和可选状态必须来自 `/api/capabilities`，不得硬编码数量或把 disabled/degraded 来源显示为就绪。
 - 新证据在 `ingest` 时逐条执行确定性分类；普通研究任务只刷新实体与主题快照，全库重分类保留给启动同步和显式来源同步，避免缓存任务重复扫描整个证据库。
 - 主题定义、别名、实体、主题快照、报告版本和 claim-evidence 引用均须持久化。趋势至少需要两个可比快照；ETF 持仓、流动性、指数规则或美国可交易状态未核验时必须保持 `unknown`/`not_assessed`。

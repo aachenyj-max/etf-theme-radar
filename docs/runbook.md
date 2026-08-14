@@ -28,7 +28,7 @@
 
 Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6 次模型请求、12 次工具调用和 480 秒，自动同时覆盖产业动量与 ETF 格局；来源优先级为现有证据/缓存、官方 ETF 持仓、天天基金快照、yfinance，再按缺口补学术、招聘、专利线索和反方检索。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
 
-通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v12` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看 `agent_runs` 与 `tool_calls`。响应不会包含 API key 或模型隐藏推理内容。
+通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v13` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看旧研究运行审计，通过对话消息返回的 `goal.goal_id` 检查新交互 Goal。响应不会包含 API key 或模型隐藏推理内容。
 
 新入库事件的完整性结果可在 SQLite `content_quality_results` 中按 `event_id` 检查。首页证据数突然下降时，先按 `status`、`missing_fields_json` 和 `issues_json` 汇总，不要删除原始事件或手工改成 `publishable`。`needs_enrichment` 等待重抽取，`rejected` 仍保留原始文档用于审计；`config/defaults.yaml` 的 `maximum_boilerplate_ratio` 默认 0.25。
 
@@ -45,6 +45,12 @@ python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy
 核对 `processed`、`effective_increment`、`failure_reasons`、`recovery_point` 和 `has_more`，并确认 `raw_documents` 行数/内容哈希未变化。`extraction_exceptions` 的 open 项必须查明缺失原文或写入错误；补齐后从合适恢复点重跑，成功项会变为 resolved。正式库仅在备份完成的维护窗口执行。
 
 Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`agent_events` 是只追加安全审计，`concurrency_leases` 是可过期槽位。遇到 429/503 时本地有效并发减半，冷却后逐槽恢复；不要通过增加 API/Worker 实例规避限速。Worker 重启后等待 lease 过期即可由新 owner 恢复，禁止人工直接改表抢占仍有效的 lease。
+
+## 多对话消息与顺序诊断
+
+使用 `POST /api/conversations` 创建绑定已选主题的研究对话；使用 `POST /api/conversations/{conversation_id}/messages` 写入用户消息，请求体必须包含客户端稳定的 `idempotency_key`。网络重试使用同一键会返回原消息和原 Goal（HTTP 200）；首次写入返回 HTTP 202。通过 `GET /api/conversations/{conversation_id}/messages` 按 `message_seq` 核对历史。不要直接更新或删除 `conversation_messages`，数据库会以 `conversation_messages are immutable` 拒绝操作。
+
+若同一对话的后续消息长期 queued，先检查该对话前一 Goal 对应的 `concurrency_leases.expires_at` 和 owner；有效 lease 存在时属于正常串行等待。其他对话仍应能领取交互槽，若全部对话均停滞，再检查交互 lane 是否已达到 `/api/capabilities` 报告的上限。任务 2.1 发布检查为 40 张应用表、契约 `2026-08-14.v13`，并运行 `python -m pytest tests/test_conversations.py tests/test_research_queue.py -q`。
 
 研究完成后可按 `theme_id` 和运行 ID 在 `independent_score_snapshots` 核对三条评分。`not_assessed` 表示来源类型、历史快照或已核验 ETF 数量未达到配置门槛；不得手工补零、将旧主题强度当综合分，或跨三个维度自行加权。公式、门槛与 `independent-scores-v1` 版本均来自 `config/defaults.yaml`。
 

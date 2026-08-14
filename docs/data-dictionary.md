@@ -24,6 +24,8 @@
 | `agent_goals` | 三 Agent 共用的持久目标；保存幂等键、类型、lane、状态/阶段、优先级、输入/结果、取消标志、deadline、lease、heartbeat 和 attempt。 |
 | `agent_events` | Goal 的只追加安全审计事件；保存前后状态、事件类型、时间、安全摘要和结构化详情，不保存隐藏思维链。 |
 | `concurrency_leases` | 单 Worker 内交互/后台并发槽占用；以 Goal 唯一绑定 owner、lane、获取时间、heartbeat 和过期时间。 |
+| `conversations` | 研究对话元数据；保存所属用户、已选主题、标题、状态及创建/更新时间。 |
+| `conversation_messages` | 不可变消息；按 `conversation_id + message_seq` 连续排序，以 `conversation_id + idempotency_key` 去重，并关联唯一 `research_turn` Goal；数据库触发器拒绝 UPDATE/DELETE。 |
 | `content_quality_results` | 每个 evidence ID 的确定性完整性快照；保存内容哈希、解析版本、状态、缺失字段、问题码、正文/摘要/噪声指标和评估时间。 |
 | `extracted_facts` | 每个 evidence ID 的当前结构化事实；保存内容哈希、解析版本、审计状态、主体、发生时间、动作、原文数字、领域、地点、产业链位置、逐条错误和抽取时间。 |
 | `extraction_exceptions` | 历史重抽取异常队列；按 evidence ID、组合解析版本和阶段唯一，保存内容哈希、open/resolved、错误、尝试次数、首次/最近失败及解决时间。 |
@@ -35,11 +37,13 @@
 | `candidate_evidence` / `candidate_entities` / `candidate_aliases` | 保存候选与证据、实体和临时别名的可追溯关系。 |
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |
 
-阶段 1 契约共 38 张应用表。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
+任务 2.1 契约共 40 张应用表，公共契约为 `2026-08-14.v13`。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
 
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
 
 Agent Goal 状态转换由 Store 白名单控制：信息 Goal 使用 `queued → planning → collecting/extracting → validating → replanning（可选） → completed/partial/needs_attention`；排队取消直接进入 `cancelled`，活动取消先置 `cancel_requested`，再由 lease owner 确认终止。过期活动 lease 可被新 owner 原阶段恢复，`attempt` 增加且追加 `recovered` 事件。
+
+研究消息写入与对应 Goal 创建位于同一 `BEGIN IMMEDIATE` 事务。`research_turn` 从 `queued` 首次领取后进入 `context_building`；领取查询排除已有同一 `conversation_id` 活跃 lease 的候选，但仍可领取其他对话。幂等重放返回原消息和原 Goal，不增加序号、不覆盖内容。
 
 内容质量状态固定为 `publishable`、`needs_enrichment`、`rejected`。缺失字段包括 `raw_text`、`title`、`summary`、`distinct_summary`、`event_subject`、`event_action` 与 `clean_body`；对应问题码用于审计和重抽取路由。没有质量记录不等于通过。
 

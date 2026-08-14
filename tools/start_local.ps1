@@ -12,7 +12,7 @@ $pythonCommand = if (Test-Path (Join-Path $projectRoot ".venv\Scripts\python.exe
 $apiPort = 8001
 $webPort = 3000
 $serviceId = "etf-theme-radar"
-$contractVersion = "2026-08-14.v12"
+$contractVersion = "2026-08-14.v13"
 $apiBaseUri = "http://127.0.0.1:$apiPort"
 $webUri = "http://127.0.0.1:$webPort"
 
