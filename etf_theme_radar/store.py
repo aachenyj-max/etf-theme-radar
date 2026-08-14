@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (agent_run_id TEXT PRIMARY KEY, run_id TEX
 CREATE TABLE IF NOT EXISTS run_registry (run_id TEXT PRIMARY KEY, database_path TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS theme_aliases (theme_id TEXT, alias TEXT, alias_type TEXT, confirmed INTEGER DEFAULT 0, created_at TEXT, PRIMARY KEY(theme_id,alias));
 CREATE TABLE IF NOT EXISTS theme_snapshots (snapshot_id TEXT PRIMARY KEY, theme_id TEXT, as_of_date TEXT, metrics_json TEXT, score REAL, confidence TEXT, evidence_count INTEGER, source_type_count INTEGER, trend TEXT, trend_reason TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS independent_score_snapshots (snapshot_id TEXT PRIMARY KEY, snapshot_scope TEXT NOT NULL, theme_id TEXT NOT NULL, dimension TEXT NOT NULL, value REAL, status TEXT NOT NULL, as_of_date TEXT NOT NULL, input_coverage REAL NOT NULL, config_version TEXT NOT NULL, reasons_json TEXT NOT NULL, components_json TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS entities (entity_id TEXT PRIMARY KEY, entity_type TEXT, canonical_name TEXT, ticker TEXT, exchange TEXT, review_status TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS entity_aliases (entity_id TEXT, alias TEXT, PRIMARY KEY(entity_id,alias));
 CREATE TABLE IF NOT EXISTS entity_links (link_id TEXT PRIMARY KEY, entity_id TEXT, event_id TEXT, theme_id TEXT, relation_type TEXT, confidence REAL, review_status TEXT, created_at TEXT);
@@ -860,6 +861,36 @@ class EvidenceStore:
         result = [dict(zip(keys, row)) for row in self.conn.execute(query, params)]
         for item in result:
             item["metrics"] = json.loads(item["metrics"] or "{}")
+        return result
+
+    def save_independent_score_snapshots(self, items: list[dict]) -> None:
+        with self.conn:
+            for item in items:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO independent_score_snapshots
+                    (snapshot_id,snapshot_scope,theme_id,dimension,value,status,as_of_date,input_coverage,config_version,reasons_json,components_json,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        item["snapshot_id"], item["snapshot_scope"], item["theme_id"], item["dimension"],
+                        item.get("value"), item["status"], item["as_of"], item["input_coverage"],
+                        item["config_version"], json.dumps(item.get("reasons") or [], ensure_ascii=False),
+                        json.dumps(item.get("components") or {}, ensure_ascii=False), item["created_at"],
+                    ),
+                )
+
+    def independent_score_snapshots(self, theme_id: str, snapshot_scope: str | None = None) -> list[dict]:
+        query = """SELECT snapshot_id,snapshot_scope,theme_id,dimension,value,status,as_of_date,input_coverage,
+                   config_version,reasons_json,components_json,created_at FROM independent_score_snapshots WHERE theme_id=?"""
+        params: list[str] = [theme_id]
+        if snapshot_scope:
+            query += " AND snapshot_scope=?"
+            params.append(snapshot_scope)
+        query += " ORDER BY as_of_date DESC,snapshot_scope DESC,dimension"
+        keys = ("snapshot_id", "snapshot_scope", "theme_id", "dimension", "value", "status", "as_of", "input_coverage", "config_version", "reasons", "components", "created_at")
+        result = [dict(zip(keys, row)) for row in self.conn.execute(query, params)]
+        for item in result:
+            item["reasons"] = json.loads(item["reasons"] or "[]")
+            item["components"] = json.loads(item["components"] or "{}")
         return result
 
     def save_theme_candidate(self, item: dict) -> None:

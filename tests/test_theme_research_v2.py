@@ -73,6 +73,22 @@ def test_key_evidence_cards_have_urls_and_do_not_repeat_publishers(tmp_path: Pat
     store.close()
 
 
+def test_research_persists_three_independent_scores_without_composite(tmp_path: Path):
+    store = EvidenceStore(tmp_path / "independent-scores.db")
+    for number, publisher in enumerate(("a.example", "b.example", "c.example")):
+        _save_publishable(store, _event(str(number), publisher=publisher))
+    store.commit()
+
+    result = run_theme_research(store, "ai-infrastructure", tmp_path / "report", run_id="score-run")
+
+    assert set(result["independent_scores"]) == {"theme_credibility", "industry_momentum", "etf_opportunity"}
+    assert "overall_score" not in result["independent_scores"]
+    persisted = store.independent_score_snapshots("ai-infrastructure", snapshot_scope="score-run")
+    assert len(persisted) == 3
+    assert {item["status"] for item in persisted} <= {"assessed", "not_assessed"}
+    store.close()
+
+
 def test_report_has_structured_scenarios_scorecard_and_explained_gaps(tmp_path: Path):
     store = EvidenceStore(tmp_path / "structured.db")
     for number, publisher in enumerate(("a.example", "b.example", "c.example")):

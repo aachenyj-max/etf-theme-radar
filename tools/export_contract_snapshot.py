@@ -95,6 +95,7 @@ def build_snapshot() -> dict[str, object]:
             "content_quality": ["publishable", "needs_enrichment", "rejected"],
             "extracted_fact": ["audited", "incomplete"],
             "extraction_exception": ["open", "resolved"],
+            "independent_score": ["assessed", "not_assessed"],
             "theme_candidate": [
                 "signal", "validating", "awaiting_confirmation",
                 "confirmed", "merged", "rejected",

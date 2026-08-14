@@ -12,6 +12,7 @@ from pydantic_ai import Agent, ModelSettings, UsageLimits
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from .scoring import independent_score_snapshots
 from .store import EvidenceStore
 from .research_quality import assess_etf_landscape, assess_investability, counter_evidence_map
 
@@ -565,7 +566,46 @@ def run_theme_research(
     publication_gate = _publication_gate(gate_input)
     audit={"run_id":run_id,"passed":not audit_errors and publication_gate["passed"],"errors":[*audit_errors, *publication_gate["failed_checks"]],"publication_gate":publication_gate,"llm_used":bool(summary),"no_trend_claim":True,"no_product_recommendation":True,"evidence_summary_schema_version":EVIDENCE_SUMMARY_SCHEMA_VERSION,"evidence_summary_note":analysis_note or "逐条证据摘要已通过审计"}
     score_data={"run_id":run_id,"theme_id":theme,"theme_strength_score":score,"components":components,"unavailable_dimensions":["persistence"],"calculation":"仅对可用维度重新归一化；不推断历史趋势"}
-    for name,data in (("theme-hypothesis.json",hypothesis),("theme-score.json",score_data),("investability-assessment.json",investability),("etf-landscape.json",landscape),("report-audit.json",audit),("evidence-appendix.json",{"key_evidence":headline,"selected":support,"excluded":excluded,"counter":counter})): _write(out/name,data)
+    existing_snapshots = store.theme_snapshots(theme)
+    evidence_dates = [str(item.get("published_at") or item.get("observed_at") or "")[:10] for item in selected]
+    as_of = max((value for value in evidence_dates if value), default=datetime.now().date().isoformat())
+    verified_products = int(landscape.get("competitor_count") or 0) if landscape.get("overlap_status") == "available" else 0
+    independent_scores = independent_score_snapshots(
+        theme,
+        as_of,
+        {
+            "theme_credibility": {
+                "signals": {
+                    "authority": available["evidence_quality"], "source_diversity": available["evidence_diversity"],
+                    "consistency": 1.0 if not counter.get("counter_evidence") else 0.5,
+                    "persistence": 1.0 if len(existing_snapshots) >= 2 else None,
+                    "entity_coverage": available["company_breadth"],
+                },
+                "source_type_count": len(types), "official_source_count": len(first),
+            },
+            "industry_momentum": {
+                "signals": {
+                    "research": available["research_activity"], "patents": None,
+                    "hiring": available["hiring_activity"], "capital_projects": None,
+                    "commercial_adoption": available["commercial_adoption"], "chain_diffusion": None,
+                },
+                "comparable_snapshot_count": len(existing_snapshots),
+            },
+            "etf_opportunity": {
+                "signals": {
+                    "verified_products": min(1.0, verified_products / 3) if verified_products else None,
+                    "purity": None, "differentiation": None,
+                    "holdings_coverage": 1.0 if landscape.get("overlap_status") == "available" else None,
+                    "fee_liquidity": None,
+                    "tradability": 1.0 if investability.get("us_tradable_coverage") == "verified" else None,
+                },
+                "verified_product_count": verified_products,
+            },
+        },
+        snapshot_scope=run_id,
+    )
+    store.save_independent_score_snapshots(list(independent_scores.values()))
+    for name,data in (("theme-hypothesis.json",hypothesis),("theme-score.json",score_data),("independent-scores.json",independent_scores),("investability-assessment.json",investability),("etf-landscape.json",landscape),("report-audit.json",audit),("evidence-appendix.json",{"key_evidence":headline,"selected":support,"excluded":excluded,"counter":counter})): _write(out/name,data)
     hiring=sum(e["source_type"]=="jobs" for e in selected)
     verdict_labels = {"supported": "支持", "mixed": "混合", "insufficient": "证据不足"}
     lines=[f"# {theme_name or theme}｜主题研究", "", f"**状态：{status}**　主题强度：**{score:.1f}/100**　数据置信度：**{'中' if len(types)>=2 else '低'}**", "", "## 核心结论", f"**{verdict_labels[conclusion['verdict']]}｜置信度 {conclusion['confidence']}**", conclusion["statement"], "", "## 为什么研究这个主题", hypothesis["hypothesis"], report_sections["why_theme"]["selection_reason"], "", "## 产业链结构与潜力", report_sections["industry_chain"]["priority_logic"]]
@@ -614,6 +654,7 @@ def run_theme_research(
         },
         "conclusion": conclusion,
         "report_sections": report_sections,
+        "independent_scores": independent_scores,
         "detail": {
             "hypothesis": hypothesis,
             "counter": counter,

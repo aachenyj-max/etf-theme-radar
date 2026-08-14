@@ -41,7 +41,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化，当前版本为 `2026-08-14.v11`。`/health` 与 `/api/capabilities` 必须报告相同版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 `2026-08-14.v12`。`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
@@ -56,10 +56,12 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 
 任务 1.4 当前应用表增加至 37 张，新增 `extraction_exceptions`；公开 API 形状未变化，契约版本保持 `2026-08-14.v11`。
 
+任务 1.6 当前应用表增加至 38 张，新增 `independent_score_snapshots`；研究结果新增三个独立评分维度，契约版本提升为 `2026-08-14.v12`。三个维度仅共享主题和运行范围，不计算跨维度综合分。
+
 | 领域 | 表 |
 |---|---|
 | 原始证据与治理 | `raw_documents`、`normalized_events`、`citations`、`connector_health` |
-| 主题与评分 | `themes`、`theme_aliases`、`theme_snapshots`、`theme_scores` |
+| 主题与评分 | `themes`、`theme_aliases`、`theme_snapshots`、`theme_scores`、`independent_score_snapshots` |
 | 候选发现 | `theme_candidates`、`candidate_evidence`、`candidate_entities`、`candidate_aliases`、`discovery_runs`、`source_watermarks` |
 | 实体 | `entities`、`entity_aliases`、`entity_links` |
 | 研究运行与审计 | `research_runs`、`run_registry`、`run_steps`、`approvals`、`agent_runs`、`tool_calls` |

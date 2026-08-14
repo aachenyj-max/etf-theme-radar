@@ -27,6 +27,7 @@
 | `content_quality_results` | 每个 evidence ID 的确定性完整性快照；保存内容哈希、解析版本、状态、缺失字段、问题码、正文/摘要/噪声指标和评估时间。 |
 | `extracted_facts` | 每个 evidence ID 的当前结构化事实；保存内容哈希、解析版本、审计状态、主体、发生时间、动作、原文数字、领域、地点、产业链位置、逐条错误和抽取时间。 |
 | `extraction_exceptions` | 历史重抽取异常队列；按 evidence ID、组合解析版本和阶段唯一，保存内容哈希、open/resolved、错误、尝试次数、首次/最近失败及解决时间。 |
+| `independent_score_snapshots` | 每次研究运行按 `snapshot_scope` 保存主题可信度、产业动量和 ETF 机会度三条不可变记录；字段包含独立 `value`、`assessed/not_assessed`、`as_of_date`、输入覆盖率、配置版本、原因和组件，不含综合分。 |
 | `etf_market_snapshots` | 保存报告旁的独立动态 ETF 行情快照及 stale-if-error 状态。 |
 | `etf_preview_snapshots` | 保存天天基金产品目录、费率、规模、复权收益、申购状态及场内溢价/成交额的独立快照。 |
 | `report_assets` / `report_versions` | 每个已确认主题保存一条主报告资产及其经用户核实的不可变版本；版本 payload 冻结 `conclusion`、`report_sections`、审计和引用。 |

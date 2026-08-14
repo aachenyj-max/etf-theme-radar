@@ -16,6 +16,33 @@ minimum_evidence:
   independent_source_types: 3
   official_sources: 1
   listed_companies: 15
+independent_score_snapshot:
+  config_version: independent-scores-v1
+  minimum_input_coverage: 0.60
+  credibility_min_source_types: 3
+  credibility_min_official_sources: 1
+  momentum_min_comparable_snapshots: 2
+  etf_min_verified_products: 2
+score_theme_credibility:
+  authority: 0.30
+  source_diversity: 0.25
+  consistency: 0.20
+  persistence: 0.15
+  entity_coverage: 0.10
+score_industry_momentum:
+  research: 0.15
+  patents: 0.15
+  hiring: 0.20
+  capital_projects: 0.20
+  commercial_adoption: 0.20
+  chain_diffusion: 0.10
+score_etf_opportunity:
+  verified_products: 0.20
+  purity: 0.20
+  differentiation: 0.20
+  holdings_coverage: 0.15
+  fee_liquidity: 0.10
+  tradability: 0.15
 index_constraints:
   constituent_count_min: 25
   constituent_count_max: 50
