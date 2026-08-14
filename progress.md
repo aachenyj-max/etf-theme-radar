@@ -387,7 +387,7 @@ flowchart LR
   - 导出当前表、状态枚举、路由、契约版本和前端网关依赖到 `docs/architecture.md`。
   - 新增契约测试，断言旧报告路由 `report:run_id`、队列语义和 `/api/capabilities` 仍兼容。
   - 运行：`python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`；预期全部通过。
-- [ ] **任务 0.2：记录基准数据质量与刷新失败样本**
+- [x] **任务 0.2：记录基准数据质量与刷新失败样本**
   - 为标题等于摘要、持仓导航噪声、AIQ/WTAI 限速和空快照拒写建立脱敏 fixture。
   - 运行：`python -m pytest tests/test_evidence_summaries.py tests/test_etf_market.py -q`。
 - [ ] **任务 0.3：提交基线**
@@ -600,3 +600,4 @@ flowchart LR
 | 日期 | 阶段 / 任务 | 提交 | 验证命令与结果 | 未解决问题 |
 |---|---|---|---|---|
 | 2026-08-14 | 阶段 0 / 任务 0.1 | `3b294e6` | `python -m pytest tests/test_api_contracts.py tests/test_research_queue.py -q`：8 passed；`python -m pytest -q`：98 passed | 无；契约版本未改变，任务 0.2 尚未开始 |
+| 2026-08-14 | 阶段 0 / 任务 0.2 | `a8974fd` | `python -m pytest tests/test_evidence_summaries.py tests/test_etf_market.py -q`：18 passed；`python -m pytest -q`：101 passed | 标题式摘要和持仓导航噪声仅完成基线冻结，留待阶段 1 修复；任务 0.3 尚未开始 |
