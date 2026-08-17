@@ -132,6 +132,8 @@ export function ThemeRadarCard({ theme, coordinate, featured = false, masonryCol
         <span className="flex items-center gap-1 whitespace-nowrap"><Clock3 className="h-3.5 w-3.5" />{theme.updatedAt}</span>
       </div>
 
+      <Button variant="ghost" className="mt-4 w-full" asChild><Link href={`/theme-radar?theme=${encodeURIComponent(theme.slug)}`}>查看主题详情 <ArrowRight className="h-4 w-4" /></Link></Button>
+
       <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="mt-5 flex w-full items-center justify-between rounded-xl border border-line bg-canvas/70 px-4 py-3 text-xs font-semibold text-ink transition hover:border-ink/20 lg:hidden">{expanded ? "收起关键信号" : "查看关键信号"}<Minus className="h-3.5 w-3.5" /></button>
 
       <div className="-mx-5 -mb-5 mt-5 border-t border-line bg-paper/98 sm:-mx-6 sm:-mb-6">

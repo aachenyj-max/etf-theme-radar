@@ -34,6 +34,7 @@
 | `etf_preview_snapshots` | 保存天天基金产品目录、费率、规模、复权收益、申购状态及场内溢价/成交额的独立快照。 |
 | `report_assets` / `report_versions` | 每个已确认主题保存一条主报告资产及其经用户核实的不可变版本；版本 payload 冻结 `conclusion`、`report_sections`、审计和引用。 |
 | `daily_briefing_assets` | 按 `as_of_date` 唯一保存每日简报快照，包含生成时间、冻结 evidence ID、结构化合格事实和内容哈希；同日重建原子替换，首页仅读取最新快照。 |
+| `theme_coverage_cells` | 每个已确认主题的六类证据覆盖单元；保存 `covered`/缺口状态、支撑 evidence ID、缺口原因、补证路径和更新时间。主题详情仅返回持久缺口，未生成单元不伪装为已覆盖。 |
 | `theme_candidates` | 保存候选名称、状态、稳定签名、发现窗口、门槛指标和结构化视图。 |
 | `candidate_evidence` / `candidate_entities` / `candidate_aliases` | 保存候选与证据、实体和临时别名的可追溯关系。 |
 | `discovery_runs` / `source_watermarks` | 保存发现运行审计与来源增量游标；游标不替代原始来源 URL。 |

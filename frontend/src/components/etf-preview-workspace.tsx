@@ -49,6 +49,7 @@ function SortLabel({ label, field, active, order, onSort }: { label: string; fie
 }
 
 export function EtfPreviewWorkspace() {
+  const [view, setView] = useState<"products" | "sec" | "holdings">("products");
   const [category, setCategory] = useState<Category>("sp500");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -118,6 +119,11 @@ export function EtfPreviewWorkspace() {
       </section>
 
       <section className="mt-6">
+        <div className="mb-5 flex flex-wrap gap-2" role="tablist" aria-label="ETF 研究分区">
+          {([ ["products","产品预览"], ["sec","SEC 新 ETF"], ["holdings","持仓变化"] ] as const).map(([id,label]) => <button key={id} role="tab" aria-selected={view===id} onClick={() => setView(id)} className={cn("rounded-lg border px-3 py-2 text-xs font-semibold transition", view===id ? "border-ink bg-ink text-white" : "border-line bg-paper text-ink hover:border-ink/25")}>{label}</button>)}
+        </div>
+        {view !== "products" && <div className="mb-5 rounded-2xl border border-line bg-paper p-5 text-sm"><p className="font-semibold text-ink">{view === "sec" ? "SEC 新 ETF" : "发行人官方持仓变化"}</p><p className="mt-2 leading-6 text-muted">当前 ETF 预览快照的来源为 {data?.source || "尚未同步"}，截至日为 {asOf}。该快照没有可安全映射到此分区的独立记录，因此状态为 not_assessed；系统不会从产品名称、旧净值或未核验持仓推断新 ETF 或持仓变化。</p>{data?.errors?.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber">{data.errors.map((item,index)=><li key={`${item.code||"error"}-${index}`}>{item.code || "refresh_error"}：{item.error}</li>)}</ul> : <p className="mt-3 text-xs text-muted">刷新失败原因：无。</p>}</div>}
+        {view === "products" && <>
         <div className="flex items-end justify-between gap-5">
           <div className="grid flex-1 grid-cols-3 gap-2" role="tablist" aria-label="ETF 分类">
             {categories.map((item) => <button key={item.id} role="tab" aria-selected={category === item.id} onClick={() => { setCategory(item.id); setSortBy("scale_billion"); setOrder("desc"); }} className={cn("rounded-xl border px-4 py-3 text-left transition", category === item.id ? "border-ink bg-ink text-white shadow-card" : "border-line bg-paper text-ink hover:border-ink/25")}><span className="flex items-center justify-between gap-2 text-sm font-semibold"><span>{item.label}</span><span className={cn("tabular-nums", category === item.id ? "text-white/75" : "text-muted")}>{data?.counts?.[item.id] ?? dash}</span></span><span className={cn("mt-1 block text-[10px]", category === item.id ? "text-white/60" : "text-muted")}>{item.note}</span></button>)}
@@ -125,12 +131,13 @@ export function EtfPreviewWorkspace() {
           <label className="flex h-[58px] w-[min(31vw,340px)] shrink-0 items-center gap-2 rounded-xl border border-line bg-paper px-4 focus-within:border-signal"><Search className="h-4 w-4 text-muted" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted/60" placeholder="搜索基金名称或代码" aria-label="搜索基金名称或代码" /></label>
         </div>
         {(refreshNote || data?.state === "degraded") && <div className="mt-3 flex items-center gap-2 text-xs text-amber"><AlertTriangle className="h-3.5 w-3.5" />{refreshNote || "部分字段暂未核验，继续显示最后一次成功快照。"}</div>}
+        </>}
       </section>
 
-      <section className="mt-5 overflow-hidden rounded-2xl border border-line bg-paper shadow-card" aria-busy={loading}>
+      {view === "products" && <section className="mt-5 overflow-hidden rounded-2xl border border-line bg-paper shadow-card" aria-busy={loading}>
         {error ? <div className="grid min-h-64 place-items-center p-8 text-center"><div><AlertTriangle className="mx-auto h-6 w-6 text-amber" /><p className="mt-3 text-sm text-ink">{error}</p><Button className="mt-4" variant="outline" size="sm" onClick={() => void load()}>重新读取</Button></div></div> : loading && !data ? <div className="grid min-h-64 place-items-center"><LoaderCircle className="h-6 w-6 animate-spin text-signal" /></div> : <EtfTable category={category} data={data} sortBy={sortBy} order={order} onSort={onSort} />}
-      </section>
-      <p className="mt-3 text-[10px] leading-5 text-muted">运作费率 = 管理费 + 托管费（年化）；2025 涨幅按完整自然年度复权累计净值计算；“昨日”指最新净值日涨幅。规模和其他指标日期可悬停查看。</p>
+      </section>}
+      {view === "products" && <p className="mt-3 text-[10px] leading-5 text-muted">运作费率 = 管理费 + 托管费（年化）；2025 涨幅按完整自然年度复权累计净值计算；“昨日”指最新净值日涨幅。规模和其他指标日期可悬停查看。</p>}
     </div>
   );
 }

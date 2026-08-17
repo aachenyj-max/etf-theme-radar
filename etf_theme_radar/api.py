@@ -50,7 +50,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-17.v16"
+CONTRACT_VERSION = "2026-08-17.v17"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -555,13 +555,17 @@ THEME_LABELS = {"ai-infrastructure":"AI 基础设施","edge-ai-infrastructure":"
 def _theme_payloads() -> list[dict]:
     store = _store()
     try:
-        events = [item for item in store.events() if item.get("relevance_status")=="relevant" and item.get("theme_assignment_status")=="assigned"]
+        events = [item for item in store.publishable_events() if item.get("relevance_status")=="relevant" and item.get("theme_assignment_status")=="assigned"]
         definitions={item["theme_id"]:item for item in store.theme_definitions()}
         snapshots=store.theme_snapshots()
         reports={item["theme_id"]:item for item in store.report_assets() if item.get("kind") == "theme_report"}
+        coverage_cells=store.theme_coverage_cells()
     finally: store.close()
     grouped:dict[str,list[dict]] = {}
     for event in events: grouped.setdefault(event.get("primary_theme") or "unknown",[]).append(event)
+    coverage_by_theme: dict[str, list[dict]] = {}
+    for cell in coverage_cells:
+        coverage_by_theme.setdefault(cell["theme_id"], []).append(cell)
     payload=[]
     latest_snapshots={}
     for snapshot in snapshots: latest_snapshots.setdefault(snapshot["theme_id"],snapshot)
@@ -577,6 +581,21 @@ def _theme_payloads() -> list[dict]:
         latest=items[0] if items else {}
         metrics=(snapshot or {}).get("metrics",{})
         report=reports.get(theme,{})
+        timeline = [
+            {
+                "evidence_id": item["event_id"], "title": item.get("title") or "",
+                "occurred_at": item.get("published_at") or item.get("observed_at") or "",
+                "source": item.get("origin_source_type") or item.get("source_type") or "",
+            }
+            for item in items[:12]
+        ]
+        coverage_gaps = [
+            {
+                "kind": cell["coverage_kind"], "reason": cell["reason"],
+                "next_path": cell["next_path"], "updated_at": cell["updated_at"],
+            }
+            for cell in coverage_by_theme.get(theme, []) if cell["status"] != "covered"
+        ]
         payload.append({
             "id":f"theme_{theme}","slug":theme,"title":definition.get("name") or THEME_LABELS.get(theme,theme.replace("-"," ").title()),"englishTitle":theme.replace("-"," ").title(),
             "description":definition.get("description") or "由治理后的公开证据形成的主题观察。","sector":"semiconductors" if "semiconductor" in theme else "industrials" if "robot" in theme else "technology",
@@ -588,6 +607,7 @@ def _theme_payloads() -> list[dict]:
             "evidenceCount":len(items),"sourceTypeCount":len(source_types),"updatedAt":latest.get("observed_at") or definition.get("updated_at","") ,
             "currentConclusion":report.get("summary") or "尚未发布正式主题结论。","reportVersion":int(report.get("version") or 0),"lastVerifiedAt":report.get("updated_at") or "","reportId":report.get("report_id") or "",
             "coverage":{"evidence":len(items),"sourceTypes":len(source_types),"official":primary,"confidence":snapshot.get("confidence","low") if snapshot else "low"},
+            "timeline":timeline,"coverageGaps":coverage_gaps,
         })
     return sorted(payload,key=lambda item:item["metrics"]["themeScore"],reverse=True)
 
@@ -673,6 +693,7 @@ def dashboard(theme: str = "", industry_chain: str = "", source: str = ""):
         briefing_asset = store.latest_daily_briefing_asset()
         runs=store.research_runs(); reports=store.report_assets()
         exceptions = store.daily_briefing_exception_stats()
+        governed_evidence_count = len(store.publishable_events())
     finally: store.close()
     if briefing_asset is None:
         all_events: list[dict] = []
@@ -696,7 +717,12 @@ def dashboard(theme: str = "", industry_chain: str = "", source: str = ""):
         "events": events,
         "facets": _dashboard_facets(all_events),
         "exceptions": exceptions,
-        "metrics":{"themes":len(theme_items),"evidence":len(events),"runs":len(runs),"reports":len(reports)},
+        "metrics":{
+            "themes":len(theme_items),
+            "evidence":len(events) if briefing_asset is not None else governed_evidence_count,
+            "runs":len(runs),
+            "reports":len(reports),
+        },
         "themes":theme_items[:3],"runs":runs[:6],"generatedAt":utcnow(),
     }
 

@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ChevronDown, FilterX, LoaderCircle, Radar, RefreshCw, ShieldCheck } from "lucide-react";
 import { ThemeRadarCard } from "@/components/theme-radar-card";
 import { ThemeCandidateCard } from "@/components/theme-candidate-card";
@@ -44,6 +46,7 @@ function getMasonryColumn(index: number): 1 | 2 | 3 {
 }
 
 export function ThemeRadarWorkspace() {
+  const searchParams = useSearchParams();
   const [filters, setFilters] = useState<ThemeRadarFilters>(defaultFilters);
   const [loadState, setLoadState] = useState<ThemeRadarLoadState>("idle");
   const [snapshot, setSnapshot] = useState<ThemeRadarSnapshot | null>(null);
@@ -63,6 +66,8 @@ export function ThemeRadarWorkspace() {
 
   const emergingCount = snapshot?.themes.filter((theme) => theme.trend === "emerging").length ?? 0;
   const deepResearchCount = snapshot?.themes.filter((theme) => theme.stage === "deep_research").length ?? 0;
+  const selectedTheme = snapshot?.themes.find((item) => item.slug === searchParams.get("theme"));
+  const [detailTab, setDetailTab] = useState<"overview"|"evidence"|"etf"|"research">("overview");
 
   function updateFilter<Key extends keyof ThemeRadarFilters>(key: Key, value: ThemeRadarFilters[Key]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -104,6 +109,15 @@ export function ThemeRadarWorkspace() {
         <div className="flex flex-wrap items-center gap-4"><span className="flex items-center gap-1.5 text-signal">↗ 上升 Emerging</span><span className="text-ink/70">→ 稳定 Stable</span><span className="text-amber">↘ 降温 Cooling</span></div>
         <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-signal" />{snapshot?.coverageNote ?? "正在读取主题覆盖"}</span>
       </div>
+
+      {selectedTheme && <section className="mt-6 rounded-2xl border border-line bg-paper p-5 shadow-card" aria-label={`${selectedTheme.title}主题详情`}>
+        <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-signal">Theme detail</p><h2 className="mt-1 text-2xl font-semibold text-ink">{selectedTheme.title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{selectedTheme.currentConclusion || selectedTheme.description}</p></div><Button asChild><Link href={`/research?theme=${selectedTheme.slug}`}>开始 / 继续研究</Link></Button></div>
+        <div className="mt-5 flex flex-wrap gap-2" role="tablist" aria-label="主题详情分区">{([ ["overview","概览"],["evidence","证据时间线"],["etf","ETF 格局"],["research","研究对话"] ] as const).map(([id,label])=><button key={id} role="tab" aria-selected={detailTab===id} onClick={()=>setDetailTab(id)} className={detailTab===id?"rounded-lg bg-ink px-3 py-2 text-xs font-semibold text-white":"rounded-lg border border-line px-3 py-2 text-xs font-semibold text-ink"}>{label}</button>)}</div>
+        {detailTab==="overview"&&<><div className="mt-5 grid gap-3 sm:grid-cols-3">{[["主题可信度",selectedTheme.metrics.themeScore],["产业动量",selectedTheme.metrics.researchMomentum],["ETF 机会度",selectedTheme.metrics.etfWhiteSpace]].map(([label,value])=><div key={String(label)} className="rounded-xl bg-canvas p-4"><p className="text-xs text-muted">{label}</p><p className="mt-1 text-2xl font-semibold text-ink">{value}</p></div>)}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-canvas p-4 text-sm text-muted">每日治理后证据：{selectedTheme.evidenceCount} 条 · {selectedTheme.sourceTypeCount} 类来源<br/>趋势：{selectedTheme.trend}。{selectedTheme.trendReason || "历史不足时不推断趋势。"}</div><div className="rounded-xl bg-canvas p-4 text-sm text-muted">变化原因：{selectedTheme.latestCatalyst || "尚无新增、已治理催化事实。"}</div></div></>}
+        {detailTab==="evidence"&&<div className="mt-5 grid gap-3 lg:grid-cols-2"><div className="rounded-xl bg-canvas p-4"><p className="text-sm font-semibold text-ink">证据时间线</p><ol className="mt-3 space-y-3">{selectedTheme.timeline?.length ? selectedTheme.timeline.map((item)=><li key={item.evidence_id} className="border-l-2 border-signal/40 pl-3 text-sm"><p className="font-medium text-ink">{item.title}</p><p className="mt-1 text-xs text-muted">{item.occurred_at || "日期未核验"} · {item.source || "来源未标注"}</p></li>) : <li className="text-sm text-muted">暂无可展示的治理后时间线。</li>}</ol></div><div className="rounded-xl bg-canvas p-4"><p className="text-sm font-semibold text-ink">覆盖缺口</p><ul className="mt-3 space-y-3">{selectedTheme.coverageGaps?.length ? selectedTheme.coverageGaps.map((gap)=><li key={gap.kind} className="text-sm"><p className="font-medium text-ink">{gap.kind}</p><p className="mt-1 text-muted">{gap.reason}</p><p className="mt-1 text-xs text-signal">下一路径：{gap.next_path}</p></li>) : <li className="text-sm text-muted">当前没有记录的覆盖缺口；未生成覆盖单元不等同于已覆盖。</li>}</ul></div></div>}
+        {detailTab==="etf"&&<div className="mt-5 rounded-xl bg-canvas p-4 text-sm text-muted">ETF 格局：{selectedTheme.metrics.etfWhiteSpace}。未核验持仓、流动性或指数规则的字段保持 not_assessed。<Link className="ml-2 font-semibold text-signal" href="/etf-preview">查看 ETF 预览</Link></div>}
+        {detailTab==="research"&&<div className="mt-5 rounded-xl bg-canvas p-4 text-sm text-muted">该主题的对话、审计事件和已授权摘要在研究工作台中持续维护。<Link className="ml-2 font-semibold text-signal" href={`/research?theme=${selectedTheme.slug}`}>打开研究工作台</Link></div>}
+      </section>}
 
       {snapshot && snapshot.candidates.length > 0 && <section className="mt-6" aria-labelledby="candidate-signals-title">
         <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber">Discovery queue</p><h2 id="candidate-signals-title" className="mt-1 text-2xl font-semibold tracking-[-0.04em] text-ink">待验证主题信号</h2></div><p className="max-w-lg text-right text-xs leading-5 text-muted">只展示跨证据聚类；通过可信度门槛后才参与排序，人工确认后才进入正式主题池。</p></div>

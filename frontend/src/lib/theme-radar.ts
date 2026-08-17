@@ -41,6 +41,10 @@ export interface ThemeOpportunity {
   reportVersion?: number;
   lastVerifiedAt?: string;
   reportId?: string;
+  trendReason?: string;
+  coverage?: { evidence: number; sourceTypes: number; official: number; confidence: string };
+  coverageGaps?: Array<{ kind: string; reason: string; next_path: string; updated_at: string }>;
+  timeline?: Array<{ evidence_id: string; title: string; occurred_at: string; source: string }>;
 }
 
 export type ThemeCandidateStatus = "signal" | "validating" | "awaiting_confirmation" | "confirmed" | "merged" | "rejected";

@@ -12,7 +12,7 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。普通 queued Goal 首次领取进入 planning，`research_turn` 首次领取进入 context_building；活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt。领取交互 Goal 时会跳过已有未过期 lease 的同一 `conversation_id`，但继续选择其他对话，因此保证对话内串行而不把整个交互 lane 降为单槽。heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
 
-信息 Agent v1 使用版本化 `info_agent.md` 约束 daily、event 与 background_research 的 `information_collection` Goal。`SyncDiscoveryWorker` 优先领取 ETF 预览刷新，其后只筛选并领取该 Goal 类型，不会错误领取总结 Goal。运行时在每次采集后重新计算仅含 `content_quality_results.publishable` 的目标相关证据集合；连续零有效增量达到 `agent_runtime.consecutive_no_evidence_limit` 后停止支持性来源。随后必须使用未执行过的独立反方来源调用，并把来源状态、原始入库增量、治理后增量、停止原因和含成因/影响/补证路径的缺口写入既有 `tool_calls` 与 Goal 安全结果。每日同步在治理、候选发现和主题资产刷新成功后，将当日 publishable 证据作为 `daily_briefing_assets` 短事务冻结；首页只读取最新资产，质量失败和来源健康只以聚合异常呈现。该公开首页响应升级为 v16。
+信息 Agent v1 使用版本化 `info_agent.md` 约束 daily、event 与 background_research 的 `information_collection` Goal。`SyncDiscoveryWorker` 优先领取 ETF 预览刷新，其后只筛选并领取该 Goal 类型，不会错误领取总结 Goal。运行时在每次采集后重新计算仅含 `content_quality_results.publishable` 的目标相关证据集合；连续零有效增量达到 `agent_runtime.consecutive_no_evidence_limit` 后停止支持性来源。随后必须使用未执行过的独立反方来源调用，并把来源状态、原始入库增量、治理后增量、停止原因和含成因/影响/补证路径的缺口写入既有 `tool_calls` 与 Goal 安全结果。每日同步在治理、候选发现和主题资产刷新成功后，将当日 publishable 证据作为 `daily_briefing_assets` 短事务冻结；首页只读取最新资产，质量失败和来源健康只以聚合异常呈现。首页为 v16；主题响应的已治理时间线和持久覆盖缺口为 v17。
 
 `conversations` 保存用户、已选主题和对话状态；`conversation_messages` 以 `(conversation_id, message_seq)` 排序，并以 `(conversation_id, idempotency_key)` 去重。用户消息、连续序号与对应交互 Goal 在一个短写事务内生成，数据库触发器拒绝消息 UPDATE/DELETE，后续总结只能追加版本化资产，不能改写历史输入。
 
@@ -127,6 +127,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 | 报告详情 | `GET /api/reports/{report_id}/detail`；`GET /api/reports/{report_id}/versions`；`GET /api/reports/{report_id}/timeline`；`GET /api/reports/{report_id}/compare`；`POST /api/reports/{report_id}/market-snapshot` |
 | 统一主题研究 | `GET/POST /api/research-runs`；`GET /api/research-runs/{run_id}`；`GET /api/research-runs/{run_id}/stream`；`GET /api/research-runs/{run_id}/report`；`POST /api/research-runs/{run_id}/theme-review`；`POST /api/research-runs/{run_id}/report-review`；`POST /api/research-runs/{run_id}/rerun`；`POST /api/research-runs/{run_id}/cancel`；`POST /api/research-runs/{run_id}/finish` |
 | 旧事件研究兼容 | `POST /api/event-research-runs`；`GET /api/event-research-runs/{run_id}`；`GET /api/event-research-runs/{run_id}/report` |
+
+主题雷达前端以 URL `?theme=<theme_id>` 读取当前治理后的主题快照并提供概览、证据、ETF 和研究入口四个 tabs，不增加隐式的研究写入。ETF 预览的 SEC 新 ETF 与持仓变化 tabs 只展示独立快照的来源、截至日和失败状态；没有独立记录时保持 `not_assessed`。
 
 ### 前端 gateway 依赖
 

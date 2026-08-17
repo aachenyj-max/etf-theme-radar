@@ -499,16 +499,18 @@ flowchart LR
   - 聚类只创建候选；确认、拒绝、合并原子执行，终态不被后续发现覆盖。
   - 运行：`python -m pytest tests/test_theme_discovery.py tests/test_governance.py -q`。
   - 2026-08-17：现有原子确认、拒绝、合并及终态防覆盖边界经独立回归验证为 5 passed；只有已知 pytest 缓存路径编码警告。
-- [ ] **任务 3.5：首页改为每日简报方案 B**
+- [x] **任务 3.5：首页改为每日简报方案 B**
   - 保持既有样式/动画；信息卡补齐事件事实、主题、产业链、来源和截至日。
-- [ ] **任务 3.6：主题详情改为概览 + 四 tabs**
+- [x] **任务 3.6：主题详情改为概览 + 四 tabs**
   - 展示三分值、每日证据数、变化原因、覆盖缺口、证据时间线、ETF 格局、趋势和对话；提供开始/继续研究。
-- [ ] **任务 3.7：ETF 预览增加 SEC 新 ETF 与持仓变化 tabs**
+  - 2026-08-17：主题响应升级 v17，详情仅展示 publishable 时间线和持久覆盖缺口；未生成单元保持未评估，不作模板补全。
+- [x] **任务 3.7：ETF 预览增加 SEC 新 ETF 与持仓变化 tabs**
   - 默认产品表不变；每项显示来源、截至日、验证状态和刷新失败原因。
-- [ ] **任务 3.8：前端回归、文档与提交**
+- [x] **任务 3.8：前端回归、文档与提交**
   - 运行：`cd frontend; npm.cmd run lint`；`cd frontend; npm.cmd run test:e2e`；`python -m pytest -q`。
   - 更新 README、AGENTS、架构、数据字典和运行手册。
   - 提交信息：`feat(radar): add autonomous briefing and theme coverage`。
+  - 2026-08-17：独立测试任务验证 API/启动器回归 9 passed、前端 lint 通过、全量 pytest 175 passed；唯一 pytest 缓存路径编码警告不影响结果。按用户要求，本对话未运行 Playwright E2E，已移交测试清单。
 
 **阶段验收：** 每日主循环可自主产出高密度简报；候选仍需人工确认；主题空白单元可见且自动建补证任务；首页、主题详情、ETF tabs 与研究入口符合已选方案且视觉风格无明显漂移。
 

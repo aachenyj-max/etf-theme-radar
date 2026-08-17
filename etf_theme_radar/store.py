@@ -1168,6 +1168,23 @@ class EvidenceStore:
         (theme_id,coverage_kind,status,evidence_ids_json,reason,next_path,updated_at) VALUES (?,?,?,?,?,?,?)""", (item["theme_id"], item["coverage_kind"], item["status"], json.dumps(item.get("evidence_ids", []), ensure_ascii=False), item["reason"], item["next_path"], item["updated_at"]))
         self.commit()
 
+    def theme_coverage_cells(self, theme_id: str | None = None) -> list[dict]:
+        query = """SELECT theme_id,coverage_kind,status,evidence_ids_json,reason,next_path,updated_at
+        FROM theme_coverage_cells"""
+        params: tuple[str, ...] = ()
+        if theme_id is not None:
+            query += " WHERE theme_id=?"
+            params = (theme_id,)
+        rows = self.conn.execute(query + " ORDER BY theme_id,coverage_kind", params).fetchall()
+        return [
+            {
+                "theme_id": str(row[0]), "coverage_kind": str(row[1]), "status": str(row[2]),
+                "evidence_ids": json.loads(row[3] or "[]"), "reason": str(row[4]),
+                "next_path": str(row[5]), "updated_at": str(row[6]),
+            }
+            for row in rows
+        ]
+
     def save_extracted_fact(self, item: dict) -> None:
         self.conn.execute(
             """INSERT OR REPLACE INTO extracted_facts

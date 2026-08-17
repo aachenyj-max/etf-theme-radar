@@ -8,7 +8,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from etf_theme_radar.api import _research_run_snapshot, app
+from etf_theme_radar.api import _research_run_snapshot, _theme_payloads, app
+from etf_theme_radar.models import NormalizedEvent
 from etf_theme_radar.store import EvidenceStore
 
 
@@ -32,7 +33,7 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-17.v16"
+        assert payload["service"]["contract_version"] == "2026-08-17.v17"
         assert payload["llm"]["concurrency"]["lane_reservations"] == {
             "interactive": 10, "background": 2,
         }
@@ -99,6 +100,46 @@ def test_stream_snapshot_exposes_running_tool_and_incremental_progress(tmp_path:
     }]
 
 
+def test_theme_payload_exposes_governed_timeline_and_persisted_coverage_gaps(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "theme-detail.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    store = EvidenceStore(database)
+    for event_id, status in (("publishable", "publishable"), ("blocked", "needs_enrichment")):
+        store.save_event(NormalizedEvent(
+            event_id, "fixture", f"https://example.com/{event_id}", "official",
+            f"{event_id} event", "Robot manufacturer announced a production expansion.",
+            "2026-08-17", "2026-08-17T00:00:00+00:00", ("robotics",),
+            origin_source_type="official", publisher="Example Manufacturer",
+            primary_or_secondary="primary", relevance_status="relevant",
+            theme_assignment_status="assigned", primary_theme="robotics",
+            classification_confidence=0.9,
+        ))
+        store.save_content_quality_result({
+            "event_id": event_id, "content_hash": event_id, "parser_version": "content-quality-v1",
+            "status": status, "missing_fields": [], "issues": [], "metrics": {},
+            "evaluated_at": "2026-08-17T00:00:00+00:00",
+        })
+    store.save_theme_coverage_cell({
+        "theme_id": "robotics", "coverage_kind": "source_diversity", "status": "covered",
+        "evidence_ids": ["publishable"], "reason": "governed evidence", "next_path": "",
+        "updated_at": "2026-08-17T00:00:00+00:00",
+    })
+    store.save_theme_coverage_cell({
+        "theme_id": "robotics", "coverage_kind": "counter_evidence", "status": "missing",
+        "evidence_ids": [], "reason": "no independent counter evidence", "next_path": "collect an independent source",
+        "updated_at": "2026-08-17T00:00:00+00:00",
+    })
+    store.close()
+
+    theme = _theme_payloads()[0]
+
+    assert [item["evidence_id"] for item in theme["timeline"]] == ["publishable"]
+    assert theme["coverageGaps"] == [{
+        "kind": "counter_evidence", "reason": "no independent counter evidence",
+        "next_path": "collect an independent source", "updated_at": "2026-08-17T00:00:00+00:00",
+    }]
+
+
 def test_legacy_report_id_resolves_registered_run_database(tmp_path: Path, monkeypatch) -> None:
     registry_db = tmp_path / "registry.db"
     run_db = tmp_path / "legacy-run.db"
@@ -149,7 +190,7 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-17.v16"
+    assert snapshot["contract_version"] == "2026-08-17.v17"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
     assert "content_quality_results" in snapshot["database_tables"]
