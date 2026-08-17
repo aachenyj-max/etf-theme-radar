@@ -103,6 +103,8 @@ python -m etf_theme_radar.cli etf-preview-audit --db data/radar.db
 
 主题详情和 ETF 的附加 tabs 只读已有快照。若 SEC 新 ETF 或持仓变化显示 `not_assessed`，应检查相应来源同步、截至日期与验证状态；不得通过手工填写或把产品预览字段映射为持仓变化来消除空状态。
 
+运行 `cd frontend; npm.cmd run test:e2e` 前，先确认 `http://127.0.0.1:8001/health` 可访问。Playwright 的专用 Next 进程会设置 `RADAR_E2E=1`，只关闭该测试进程的产物目录锁以兼容 Windows 工作区；标准启动器和手工开发服务器继续持有锁。
+
 - `SEC_USER_AGENT is required`：在本地 `.env` 中设置联系人型 User-Agent，且不要提交该文件。
 - Connector 状态为 `disabled`：检查环境变量中的开关；关闭可选来源不应影响 fixture 或其他来源。
 - 外部请求失败：保留错误记录，使用缓存或 fixture 验证流程，不得伪造抓取结果。

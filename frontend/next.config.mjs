@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    lockDistDir: process.env.RADAR_E2E !== "1",
+  },
   allowedDevOrigins: ["127.0.0.1"],
   distDir: process.env.RADAR_NEXT_DIST_DIR || ".next",
   async rewrites() {

@@ -23,6 +23,8 @@ npm install
 npm run dev
 ```
 
+运行 `npm.cmd run test:e2e` 时，Playwright 会为它启动的 Next 进程设置 `RADAR_E2E=1`，仅关闭该进程的产物目录锁。真实数据页面还需要后端已在 `http://127.0.0.1:8001/health` 就绪；常规 `npm run dev` 和桌面启动器不设置此变量，仍保留目录锁。
+
 浏览器固定访问 `http://127.0.0.1:3000`，后端固定为 `http://127.0.0.1:8001`。构建校验使用 `npm run build`。项目根目录的 Windows 启动器禁止端口漂移，并通过服务契约、Worker 心跳和运行锁避免复用旧版本或启动多个实例。
 
 信息源状态页从 `/api/capabilities` 读取规范化元数据，当前预期覆盖 `7/8`，并明确展示 Google Patents、ETF 官方持仓、Yahoo Finance ETF 公开资讯及等待授权的 S&P DJI。可空 logo 使用文字缩写，不渲染空 `src`。

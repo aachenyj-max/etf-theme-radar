@@ -25,6 +25,14 @@ def test_launcher_restores_next_build_directory_environment() -> None:
     assert '$env:RADAR_NEXT_DIST_DIR = $previousNextDistDir' in launcher
 
 
+def test_e2e_server_disables_next_lock_only_for_its_own_process() -> None:
+    next_config = (PROJECT_ROOT / "frontend" / "next.config.mjs").read_text(encoding="utf-8")
+    playwright_config = (PROJECT_ROOT / "frontend" / "playwright.config.ts").read_text(encoding="utf-8")
+
+    assert 'lockDistDir: process.env.RADAR_E2E !== "1"' in next_config
+    assert 'set "RADAR_E2E=1" && npm run dev' in playwright_config
+
+
 def test_launcher_reuses_only_matching_contract_with_worker_heartbeat() -> None:
     launcher = (PROJECT_ROOT / "tools" / "start_local.ps1").read_text(encoding="utf-8")
     assert '$contractVersion = "2026-08-17.v17"' in launcher

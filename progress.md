@@ -511,6 +511,7 @@ flowchart LR
   - 更新 README、AGENTS、架构、数据字典和运行手册。
   - 提交信息：`feat(radar): add autonomous briefing and theme coverage`。
   - 2026-08-17：独立测试任务验证 API/启动器回归 9 passed、前端 lint 通过、全量 pytest 175 passed；唯一 pytest 缓存路径编码警告不影响结果。按用户要求，本对话未运行 Playwright E2E，已移交测试清单。
+  - 2026-08-17：E2E 初次失败为 Next 16 产物目录原生锁拒绝访问；测试专用 `RADAR_E2E=1` 已隔离关闭该锁，webServer 可进入用例。无本地 API 时真实页面剩余 4 项因 `127.0.0.1:8001` 连接拒绝失败；运行手册已补充 API 健康前置条件。
 
 **阶段验收：** 每日主循环可自主产出高密度简报；候选仍需人工确认；主题空白单元可见且自动建补证任务；首页、主题详情、ETF tabs 与研究入口符合已选方案且视觉风格无明显漂移。
 
