@@ -466,8 +466,8 @@ flowchart LR
 - [x] **任务 2.7：重塑研究工作台但保持视觉风格**
   - 左对话列表、中间流式回答、右侧按需抽屉；默认状态行显示动作、耗时、来源数。
   - 运行：`cd frontend; npm.cmd run lint` 和 `cd frontend; npm.cmd run test:e2e -- research-review.spec.ts`。
-- [ ] **任务 2.8：同步文档并提交**
-  - 更新 README、AGENTS、架构、数据字典和运行手册；提升服务契约版本。
+- [x] **任务 2.8：同步文档并提交**
+  - 已更新 README、AGENTS、架构、数据字典和运行手册；任务 2.6 的公开路由变更已将服务契约提升并冻结为 v15，任务 2.7/2.8 未新增公开 API，版本保持不变。
   - 提交信息：`feat(research): add concurrent conversations and controlled memory`。
 
 **阶段验收：** 10 个交互会话与 2 个后台槽位压力测试无串话；首个可见状态快速返回；引用可验证；同对话顺序稳定；压缩前后关键结论/引用/未决问题不丢；其他对话默认不进入上下文。
@@ -616,3 +616,4 @@ flowchart LR
 | 2026-08-14 | 阶段 2 / 任务 2.5 | `a64cfb2` | RED：`summary_agent` 与 `memory` 模块缺失；`python -m pytest tests/test_summary_agent.py tests/test_memory.py -q`：6 passed；Agent Goal/队列扩展回归：22 passed；`python -m pytest -q`：157 passed；契约导出：44 张表、`2026-08-14.v14` | 无；持久防抖、不可变总结/检查点、连续性/引用/前版校验与记忆 supersede 生命周期已落地，任务 2.6 尚未开始 |
 | 2026-08-17 | 阶段 2 / 任务 2.6 | `c71d8e7` | RED：跨对话链接服务、GET/PUT 路由和 v15 契约缺失；`python -m pytest tests/test_conversations.py tests/test_context_builder.py -q`：9 passed；`python -m pytest -q`：160 passed；契约导出：45 张表、`2026-08-14.v15`；隔离端口验证首次启动、健康复用、非本项目端口占用可读失败三路径通过 | 无；默认关闭、同用户同主题原子选择、只读最新授权摘要且不返回原始消息已覆盖，任务 2.7 尚未开始 |
 | 2026-08-17 | 阶段 2 / 任务 2.7 | `81ec8ba` | RED：对话研究工作台组件缺失；`cd frontend; npm.cmd run lint`：通过；`cd frontend; npm.cmd run test:e2e -- research-review.spec.ts`：6 passed | 无；左侧对话列表、中部不可变消息/审计流、行动/耗时/来源状态线和按需安全抽屉已落地；仅 404/405 回退旧任务视图，任务 2.8 尚未开始 |
+| 2026-08-17 | 阶段 2 / 任务 2.8 | `612945e` | `python tools/export_contract_snapshot.py`：45 张表、`2026-08-14.v15`；`python -m pytest -q`：160 passed；`cd frontend; npm.cmd run lint`：通过；任务 2.7 指定 E2E：6 passed | 无；阶段 2 已收口。全量前端 E2E 的 4 项依赖本机 8001 API；验证时 API 未运行而连接拒绝，未将其记为代码回归或修改启动器；不实施阶段 3 |
