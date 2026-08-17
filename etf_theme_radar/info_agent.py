@@ -187,6 +187,13 @@ def _remaining_gaps(*, baseline: int, current: int, counter: dict[str, Any]) -> 
             "impact": "支持性信息不能单独形成强结论",
             "next_path": "下一轮优先补充独立反方公开来源",
         })
+    elif int(counter.get("governed_effective_delta") or 0) == 0:
+        gaps.append({
+            "gap": "反方检查未发现治理后有效反证",
+            "cause": "独立反方来源已执行，但没有新增通过完整性门的相关记录",
+            "impact": "支持性信息仍需保持证据边界，不能因缺少反证而提升结论强度",
+            "next_path": "下一观察窗口优先补充不同发布方或来源类型的反方公开证据",
+        })
     return gaps
 
 
