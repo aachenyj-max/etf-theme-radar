@@ -491,13 +491,14 @@ flowchart LR
   - 持久化六类覆盖单元、状态、证据、原因和下一路径；不得用固定产业链模板表示已覆盖。
   - 运行：`python -m pytest tests/test_theme_coverage.py tests/test_theme_research_v2.py -q`。
   - 2026-08-17：外部验证专项 8 passed、全量 170 passed；pytest 缓存路径编码警告不影响结果。
-- [ ] **任务 3.3：实现每日简报资产与首页 API**
+- [x] **任务 3.3：实现每日简报资产与首页 API**
   - 只收录通过完整性门的信息；支持主题/产业链/来源下钻及异常统计。
   - 运行：`python -m pytest tests/test_daily_briefing.py tests/test_api_contracts.py -q`。
-  - 2026-08-17：已完成测试先行的实现与 v16 文档同步，等待用户执行指定 pytest 回归后再勾选验收状态。
-- [ ] **任务 3.4：完善候选主题人工确认**
+  - 2026-08-17：已完成测试先行的实现与 v16 文档同步；独立回归 `tests/test_daily_briefing.py tests/test_api_contracts.py` 为 8 passed，只有已知 pytest 缓存路径编码警告。
+- [x] **任务 3.4：完善候选主题人工确认**
   - 聚类只创建候选；确认、拒绝、合并原子执行，终态不被后续发现覆盖。
   - 运行：`python -m pytest tests/test_theme_discovery.py tests/test_governance.py -q`。
+  - 2026-08-17：现有原子确认、拒绝、合并及终态防覆盖边界经独立回归验证为 5 passed；只有已知 pytest 缓存路径编码警告。
 - [ ] **任务 3.5：首页改为每日简报方案 B**
   - 保持既有样式/动画；信息卡补齐事件事实、主题、产业链、来源和截至日。
 - [ ] **任务 3.6：主题详情改为概览 + 四 tabs**
