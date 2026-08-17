@@ -113,7 +113,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 |---|---|
 | 健康与能力 | `GET /health`；`GET /api/capabilities`；`GET /api/connectors/health` |
 | 认证 | `GET /api/auth/session`；`POST /api/auth/login`；`POST /api/auth/logout` |
-| 研究对话 | `GET/POST /api/conversations`；`GET/POST /api/conversations/{conversation_id}/messages` |
+| 研究对话 | `GET/POST /api/conversations`；`GET/POST /api/conversations/{conversation_id}/messages`；`GET/PUT /api/conversations/{conversation_id}/links` |
 | 对话审计 | `GET /api/conversations/{conversation_id}/events`；`GET /api/conversations/{conversation_id}/stream` |
 | ETF 预览 | `GET /api/etf-preview`；`POST /api/etf-preview/refresh` |
 | 采集同步 | `POST /api/pipeline/run`；`POST /api/sync`；`GET/POST /api/sync-runs`；`GET /api/sync-runs/{sync_run_id}`；`POST /api/sync-runs/{sync_run_id}/cancel` |
@@ -134,6 +134,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 | `report-detail-gateway.ts` | `/api/reports/{report_id}/detail`、`/timeline`、`/compare`、`/market-snapshot` |
 | `report-library-gateway.ts` | `/api/reports`、`/api/reports/{report_id}`、`/api/reports/assistant` |
 | `research-workflow-gateway.ts` | `/api/research-runs`、`/api/research-runs/{run_id}`、`/stream`、`/cancel`、`/finish`、`/theme-review`、`/report-review`、`/rerun` |
+| `conversation-research-workspace.tsx` | `/api/conversations`、`/api/conversations/{conversation_id}/messages`、`/events?after_event_id=`、`/links`；只在 404/405 时使用旧研究任务组件 |
 | `theme-radar-gateway.ts` | `/api/themes`、`/api/theme-candidates/{candidate_id}/review` |
 
 `app-shell.tsx`、`source-intelligence-wall.tsx`、`system-workspace.tsx` 等组件还直接读取 `/api/capabilities`、`/api/search` 和同步状态；这些属于现有组件依赖，不应被误认为可移除的未使用路由。
