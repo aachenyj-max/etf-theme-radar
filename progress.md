@@ -486,6 +486,7 @@ flowchart LR
 - [ ] **任务 3.1：落地信息 Agent v1 与受限重规划**
   - 保存正式提示词；每日/事件 Goal 运行规划循环，按治理后有效增量停止；结束前反方检查和缺口汇总。
   - 运行：`python -m pytest tests/test_info_agent.py tests/test_agent_runtime.py -q`。
+  - 2026-08-17：实现与失败测试已提交，按用户要求未在本对话运行回归；在独立测试对话取得验证证据前不得勾选本任务或追加实施完成记录。
 - [ ] **任务 3.2：实现主题覆盖矩阵和自动补缺 Goal**
   - 持久化六类覆盖单元、状态、证据、原因和下一路径；不得用固定产业链模板表示已覆盖。
   - 运行：`python -m pytest tests/test_theme_coverage.py tests/test_theme_research_v2.py -q`。

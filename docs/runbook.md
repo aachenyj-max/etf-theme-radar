@@ -48,6 +48,8 @@ python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy
 
 Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`agent_events` 是只追加安全审计，`concurrency_leases` 是可过期槽位。遇到 429/503 时本地有效并发减半，冷却后逐槽恢复；不要通过增加 API/Worker 实例规避限速。Worker 重启后等待 lease 过期即可由新 owner 恢复，禁止人工直接改表抢占仍有效的 lease。
 
+信息 Agent v1 的 `information_collection` Goal 由 `SyncDiscoveryWorker` 在 ETF 预览刷新之后优先领取；它不会领取 `conversation_summary`。检查 Goal 的 `result_json` 时，确认 `prompt_version=info-agent-v1`、`support_sources`、`governed_effective_added`、`counter_check.attempted`、`stop_reason` 和 `remaining_gaps` 均存在。有效增量只计通过 `content_quality_results.publishable` 的相关证据；连续无有效增量停止支持性调用后，仍应有一条来自未执行支持来源、`purpose=counter` 的 `tool_calls` 审计，并分别检查其原始 `evidence_delta` 与治理后 `relevant_evidence_delta`。若执行中取消，Worker 会在下一个采集或验证边界转为 `cancelled`；不要手动修改 Goal 状态或 lease。
+
 ## 多对话消息与顺序诊断
 
 使用 `POST /api/conversations` 创建绑定已选主题的研究对话；使用 `POST /api/conversations/{conversation_id}/messages` 写入用户消息，请求体必须包含客户端稳定的 `idempotency_key`。网络重试使用同一键会返回原消息和原 Goal（HTTP 200）；首次写入返回 HTTP 202。通过 `GET /api/conversations/{conversation_id}/messages` 按 `message_seq` 核对历史。不要直接更新或删除 `conversation_messages`，数据库会以 `conversation_messages are immutable` 拒绝操作。

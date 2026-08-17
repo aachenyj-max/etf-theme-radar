@@ -871,6 +871,7 @@ class EvidenceStore:
 
     def claim_next_agent_goal(
         self, owner: str, lane: str, now: str, lease_expires_at: str, slot_limit: int,
+        *, goal_types: tuple[str, ...] | None = None,
     ) -> dict | None:
         if lane not in {"interactive", "background"}:
             raise ValueError(f"Unsupported agent goal lane: {lane}")
@@ -887,6 +888,13 @@ class EvidenceStore:
                 self.conn.commit()
                 return None
             active_marks = ",".join("?" for _ in AGENT_GOAL_ACTIVE_STATUSES)
+            type_filter = ""
+            type_params: tuple[str, ...] = ()
+            if goal_types:
+                type_filter = " AND candidate.goal_type IN ({})".format(
+                    ",".join("?" for _ in goal_types)
+                )
+                type_params = tuple(goal_types)
             row = self.conn.execute(
                 f"""SELECT goal_id,status,attempt,goal_type FROM agent_goals AS candidate
                 WHERE lane=? AND cancel_requested=0 AND (
@@ -903,8 +911,8 @@ class EvidenceStore:
                           AND json_extract(active_goal.payload_json,'$.conversation_id')=
                               json_extract(candidate.payload_json,'$.conversation_id')
                     )
-                ) ORDER BY priority DESC,created_at,goal_id LIMIT 1""",
-                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now, now, now),
+                ){type_filter} ORDER BY priority DESC,created_at,goal_id LIMIT 1""",
+                (lane, *AGENT_GOAL_ACTIVE_STATUSES, now, now, now, *type_params),
             ).fetchone()
             if row is None:
                 self.conn.commit()
@@ -1909,14 +1917,15 @@ class EvidenceStore:
         cursor=self.conn.execute("UPDATE sync_runs SET cancel_requested=1,updated_at=? WHERE sync_run_id=? AND status IN ('queued','running')",(utcnow(),sync_run_id))
         self.commit(); return cursor.rowcount==1
 
-    def claim_next_sync_run(self, owner: str, now: str, lease_expires_at: str) -> dict | None:
+    def claim_next_sync_run(self, owner: str, now: str, lease_expires_at: str, *, etf_preview_only: bool = False) -> dict | None:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             row = self.conn.execute(
                 """SELECT sync_run_id FROM sync_runs
                 WHERE cancel_requested=0 AND (status='queued' OR (status='running' AND lease_expires_at<>'' AND lease_expires_at<?))
+                  AND (?=0 OR idempotency_key LIKE 'etf-preview:%')
                 ORDER BY CASE WHEN idempotency_key LIKE 'etf-preview:%' THEN 0 ELSE 1 END,
-                         created_at LIMIT 1""", (now,),
+                         created_at LIMIT 1""", (now, int(etf_preview_only)),
             ).fetchone()
             if not row:
                 self.conn.rollback()

@@ -76,6 +76,8 @@ def prepare_research_turn(
     missing_critical_facts: list[str], created_at: str, background_goal_id: str,
 ) -> dict[str, Any]:
     """Return a phase answer and idempotently enqueue deeper evidence work."""
+    from .info_agent import create_information_goal
+
     payload = {
         "conversation_id": conversation_id,
         "message_seq": message_seq,
@@ -83,13 +85,13 @@ def prepare_research_turn(
         "phase_answer": phase_answer,
         "missing_critical_facts": list(missing_critical_facts),
     }
-    goal = store.create_agent_goal(
+    goal = create_information_goal(
+        store,
+        kind="background_research",
         goal_id=background_goal_id,
         idempotency_key=f"background_research:{conversation_id}:{message_seq}",
-        goal_type="information_collection",
-        lane="background",
+        now=created_at,
         payload=payload,
-        created_at=created_at,
     )
     replay = bool(goal.get("idempotent_replay"))
     return {

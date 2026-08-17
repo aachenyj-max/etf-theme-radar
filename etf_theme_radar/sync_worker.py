@@ -11,9 +11,11 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from .agent_goals import AgentGoalRuntime
 from .connector_factory import configured_connectors
 from .etf_preview import collect_etf_preview_snapshot, load_preview_config
 from .governance import reclassify_store
+from .info_agent import create_information_goal, run_information_goal
 from .models import utcnow
 from .ontology import refresh_research_assets
 from .pipeline import ingest
@@ -58,11 +60,25 @@ class SyncDiscoveryWorker:
     def run_once(self) -> bool:
         store = EvidenceStore(self.database_path)
         try:
-            run = store.claim_next_sync_run(self.owner, _timestamp(), _timestamp(self.lease_seconds))
-            if not run:
-                discovery_run = store.claim_next_discovery_run(self.owner, _timestamp(), _timestamp(self.lease_seconds))
+            preview_run = store.claim_next_sync_run(
+                self.owner, _timestamp(), _timestamp(self.lease_seconds), etf_preview_only=True,
+            )
+            information_goal = None if preview_run else AgentGoalRuntime(store, self.owner).claim(
+                "background", _timestamp(), _timestamp(self.lease_seconds), goal_types=("information_collection",),
+            )
+            run = None
+            discovery_run = None
+            if preview_run:
+                run = preview_run
+            elif not information_goal:
+                run = store.claim_next_sync_run(self.owner, _timestamp(), _timestamp(self.lease_seconds))
+                if not run:
+                    discovery_run = store.claim_next_discovery_run(self.owner, _timestamp(), _timestamp(self.lease_seconds))
         finally:
             store.close()
+        if information_goal:
+            self._execute_information_goal(information_goal)
+            return True
         if not run:
             if not discovery_run:
                 return False
@@ -76,6 +92,51 @@ class SyncDiscoveryWorker:
         finally:
             stopped.set(); heartbeat.join(1.0)
         return True
+
+    def _execute_information_goal(self, goal: dict) -> None:
+        stopped = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._goal_heartbeat, args=(goal["goal_id"], stopped), daemon=True,
+        )
+        heartbeat.start()
+        store = EvidenceStore(self.database_path)
+        try:
+            run_information_goal(store, goal, self.owner, collect=self._collect_information_source)
+        except Exception as exc:
+            current = store.agent_goal(goal["goal_id"])
+            if current and current["status"] not in {"completed", "cancelled", "partial", "needs_attention"}:
+                store.transition_agent_goal(
+                    goal["goal_id"], self.owner, "needs_attention", _timestamp(),
+                    safe_summary="信息 Goal 执行异常，已保留审计与待处理状态",
+                    result=current["result"], error=str(exc),
+                )
+        finally:
+            stopped.set()
+            heartbeat.join(1.0)
+            store.close()
+
+    def _collect_information_source(self, source: str, _purpose: str, payload: dict) -> dict:
+        aliases = {
+            "sec": "sec_edgar_etf", "arxiv": "openalex",
+            "company_careers": "public_job_boards", "etf_holdings": "official_etf_holdings",
+            "etf_news": "yahoo_etf_news", "patents": "google_patents", "sp_global": "sp_global_dji",
+        }
+        target = aliases.get(source, source)
+        connector = next(
+            (item for item in configured_connectors(Path("data/cache")) if item.source_name == target),
+            None,
+        )
+        if connector is None:
+            return {"status": "unavailable", "reason": "source_not_configured"}
+        until = date.fromisoformat(str(payload.get("scheduled_for") or date.today().isoformat())[:10])
+        source_store = EvidenceStore(self.database_path)
+        try:
+            result = ingest(connector, source_store, until - timedelta(days=7), until)
+            return {"status": str(result.get("status") or "succeeded"), "source": target, "events": int(result.get("events") or 0)}
+        except Exception:
+            return {"status": "degraded", "reason": "source_collection_failed"}
+        finally:
+            source_store.close()
 
     def _execute_discovery(self, run: dict) -> None:
         store = EvidenceStore(self.database_path)
@@ -124,6 +185,11 @@ class SyncDiscoveryWorker:
             except Exception as exc:
                 store.update_discovery_run(discovery_run_id, status="failed", stage="finish_research", updated_at=utcnow(), error=str(exc))
                 raise
+            if str(run.get("idempotency_key") or "").startswith("daily:"):
+                create_information_goal(
+                    store, kind="daily", goal_id=f"information:daily:{until.isoformat()}",
+                    now=utcnow(), scheduled_for=until.isoformat(),
+                )
             store.update_sync_run(run["sync_run_id"], status="completed", progress=100, updated_at=utcnow(), result={"sources": results, "governance": governance, "research_assets": assets})
         except Exception as exc:
             store.update_sync_run(run["sync_run_id"], status="failed", progress=0, updated_at=utcnow(), result=results, error=str(exc))
@@ -202,6 +268,20 @@ class SyncDiscoveryWorker:
             try:
                 store = EvidenceStore(self.database_path)
                 if not store.heartbeat_sync_run(sync_run_id, self.owner, _timestamp(), _timestamp(self.lease_seconds)):
+                    return
+                self.last_heartbeat_at = _timestamp()
+            except sqlite3.OperationalError:
+                continue
+            finally:
+                if store:
+                    store.close()
+
+    def _goal_heartbeat(self, goal_id: str, stopped: threading.Event) -> None:
+        while not stopped.wait(max(1.0, self.lease_seconds / 3)):
+            store = None
+            try:
+                store = EvidenceStore(self.database_path)
+                if not store.heartbeat_agent_goal(goal_id, self.owner, _timestamp(), _timestamp(self.lease_seconds)):
                     return
                 self.last_heartbeat_at = _timestamp()
             except sqlite3.OperationalError:

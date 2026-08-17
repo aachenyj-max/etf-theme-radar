@@ -30,6 +30,7 @@ python -m uvicorn etf_theme_radar.api:app --host 127.0.0.1 --port 8001 --reload
 - PydanticAI 驱动的有界研究 Agent：DeepSeek V4 Flash 自主选择只读工具，V4 Pro 负责主题定义和证据综合。
 - Agent 运行、模型用量和工具调用的 SQLite 审计记录；前端展示行动时间线但不展示隐藏思维链。
 - 三类 Agent 共用持久化 `agent_goals`、不可变安全事件和并发 lease；Goal 创建使用幂等键，领取、heartbeat、取消与过期恢复均由 SQLite 短事务控制。DeepSeek 本地并发默认 12，交互研究预留 10、信息规划/总结预留 2；429/503 时减半降载，冷却后逐槽恢复。
+- 信息 Agent v1 将每日、事件和对话后台补证写为 `information_collection` Goal。`SyncDiscoveryWorker` 只领取这一类后台 Goal，按正式 `info-agent-v1` 提示词的边界执行；每次支持性采集只以通过完整性门的治理后有效增量重规划，连续无增量后停止，但始终追加一次反方检查和结构化缺口汇总。它不创建正式主题、不改变主题终态，也不增加公开 API 或应用表。
 - 研究对话与消息持久化到 `conversations`、`conversation_messages`。用户消息使用对话内幂等键写入并分配连续 `message_seq`，数据库触发器禁止更新或删除既有消息；消息与交互 Goal 在同一事务创建。同一对话的后续 Goal 必须等待当前 lease 释放，不同对话可共享交互并发池。
 - 研究上下文由确定性构建器按固定信任层级和 token 预算装配。私有记忆、关联对话摘要和知识片段先做用户权限过滤，再参与预算选择；关联摘要还必须由当前对话显式允许。预算不足时优先保留正式主题资产、检查点和最新消息，不允许低信任层越级占用空间。
 - 研究 Agent v1 使用 `answer_now`、`quick_retrieve`、`background_research` 三种确定性响应模式。已有冻结上下文足够时不调用工具；快速检索最多选择 3 个直接相关来源并按充分证据/来源耗尽/预算耗尽停止；长研究先返回阶段性回答，再幂等创建后台信息 Goal。回答引用必须属于冻结 evidence ID 或本轮工具返回 ID。
@@ -40,7 +41,7 @@ python -m uvicorn etf_theme_radar.api:app --host 127.0.0.1 --port 8001 --reload
 - ingest 对每条标准化事件执行确定性信息完整性门，持久化 `publishable`、`needs_enrichment` 或 `rejected` 及缺失字段、问题和正文噪声指标。标题式摘要、空正文、导航/免责声明占比过高、缺少事件主体或动作的记录不会进入首页计数、主题评分快照或正式研究证据。
 - 同一 ingest 事务从冻结事件与原文提取主体、发生时间、动作、原文数字、领域、地点和产业链位置，写入 `extracted_facts`。未知项保持空值/`unknown`；模型增强结果必须逐条绑定输入 evidence ID，输出数量和每个数字均通过审计后才可接受。
 - 历史质量/事实可通过 `backfill-evidence-extractions` 在复制数据库上按批次幂等重建；内容哈希和两个解析版本都一致时跳过。输出记录处理数、有效新增、失败原因、恢复点和剩余批次；失败进入 `extraction_exceptions`，恢复后标记 resolved，原始文档不被覆盖。
-- SQLite lease-based 持久 Worker：研究任务与来源同步/主题发现分别由单一持久循环领取，支持 heartbeat、过期 lease 恢复、每日幂等启动补采及复核/取消的原子状态转换，不再为每次同步请求创建临时线程。
+- SQLite lease-based 持久 Worker：研究任务与来源同步/主题发现分别由单一持久循环领取；同步 Worker 还优先执行已领取的信息 Goal。所有路径支持 heartbeat、过期 lease 恢复、每日幂等启动补采及复核/取消的原子状态转换，不再为每次同步请求创建临时线程。
 - 研究任务使用“单执行槽 + FIFO 多任务等待队列 + 独立人工处理区”的 SQLite 原子队列。优先级为进行中、等待中、需要处理；待主题/报告复核、退回与配置阻断不占执行槽。执行任务进入人工处理或终态时原子提升最早等待项；主题审核通过与退回重跑先进入等待队列，空闲时自动开始。
 - 持久主题本体、别名、实体待复核队列和主题指标快照；只有两个可比快照后才输出 emerging/stable/cooling。
 - 不可变报告版本、结构化 claim↔evidence 多对多引用、版本比较 API 与前端比较视图。

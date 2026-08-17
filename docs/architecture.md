@@ -12,6 +12,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 三 Agent 共用的调度底座由 `agent_goals`、`agent_events` 与 `concurrency_leases` 构成。创建以 `idempotency_key` 去重；领取 Goal 与占用 lane 槽位在同一 `BEGIN IMMEDIATE` 事务内完成。普通 queued Goal 首次领取进入 planning，`research_turn` 首次领取进入 context_building；活动 Goal 的 lease 过期后由新 Worker 原阶段恢复并增加 attempt。领取交互 Goal 时会跳过已有未过期 lease 的同一 `conversation_id`，但继续选择其他对话，因此保证对话内串行而不把整个交互 lane 降为单槽。heartbeat 必须同时匹配 Goal 和并发 lease 的 owner。排队取消立即终止，执行中取消只设置持久标志并由 owner 在安全边界确认。安全事件只追加，不保存隐藏思维链。
 
+信息 Agent v1 使用版本化 `info_agent.md` 约束 daily、event 与 background_research 的 `information_collection` Goal。`SyncDiscoveryWorker` 优先领取 ETF 预览刷新，其后只筛选并领取该 Goal 类型，不会错误领取总结 Goal。运行时在每次采集后重新计算仅含 `content_quality_results.publishable` 的目标相关证据集合；连续零有效增量达到 `agent_runtime.consecutive_no_evidence_limit` 后停止支持性来源。随后必须使用未执行过的独立反方来源调用，并把来源状态、原始入库增量、治理后增量、停止原因和含成因/影响/补证路径的缺口写入既有 `tool_calls` 与 Goal 安全结果。该能力不新增 SQLite 表或公共路由，服务契约保持 v15。
+
 `conversations` 保存用户、已选主题和对话状态；`conversation_messages` 以 `(conversation_id, message_seq)` 排序，并以 `(conversation_id, idempotency_key)` 去重。用户消息、连续序号与对应交互 Goal 在一个短写事务内生成，数据库触发器拒绝消息 UPDATE/DELETE，后续总结只能追加版本化资产，不能改写历史输入。
 
 研究上下文构建器是纯确定性边界：先过滤私有记忆、跨对话摘要和知识片段的用户 ACL，再验证跨对话摘要是否位于当前对话的显式允许集合。通过权限门后，按主题定义、独立评分快照、压缩检查点、近期原始消息、已核验证据、冻结 ETF 快照、个人记忆、关联摘要、授权知识的顺序消费 token 预算。近期消息从最新序号向前保留，再恢复时间顺序；任一高信任层预算不足时停止选择后续低信任层。

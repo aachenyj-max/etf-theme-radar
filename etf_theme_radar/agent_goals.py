@@ -97,9 +97,13 @@ class AgentGoalRuntime:
         self.owner = owner
         self.policy = policy or GoalConcurrencyPolicy.from_defaults()
 
-    def claim(self, lane: str, now: str, lease_expires_at: str) -> dict | None:
+    def claim(
+        self, lane: str, now: str, lease_expires_at: str, *,
+        goal_types: tuple[str, ...] | None = None,
+    ) -> dict | None:
         return self.store.claim_next_agent_goal(
-            self.owner, lane, now, lease_expires_at, self.policy.lane_limits[lane]
+            self.owner, lane, now, lease_expires_at, self.policy.lane_limits[lane],
+            goal_types=goal_types,
         )
 
     def heartbeat(self, goal_id: str, now: str, lease_expires_at: str) -> bool:
