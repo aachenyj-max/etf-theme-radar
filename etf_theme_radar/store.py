@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS entity_links (link_id TEXT PRIMARY KEY, entity_id TEX
 CREATE TABLE IF NOT EXISTS report_versions (report_id TEXT, version INTEGER, content_hash TEXT, payload_json TEXT, markdown TEXT, created_at TEXT, PRIMARY KEY(report_id,version));
 CREATE TABLE IF NOT EXISTS report_claims (claim_id TEXT PRIMARY KEY, report_id TEXT, version INTEGER, claim_text TEXT, claim_type TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS report_claim_evidence (claim_id TEXT, event_id TEXT, relation TEXT, PRIMARY KEY(claim_id,event_id));
+CREATE TABLE IF NOT EXISTS daily_briefing_assets (briefing_id TEXT PRIMARY KEY, as_of_date TEXT NOT NULL UNIQUE, generated_at TEXT NOT NULL, evidence_ids_json TEXT NOT NULL, payload_json TEXT NOT NULL, content_hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_runs (sync_run_id TEXT PRIMARY KEY, status TEXT, progress INTEGER, current_source TEXT, created_at TEXT, updated_at TEXT, result_json TEXT, error TEXT, cancel_requested INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS etf_market_snapshots (snapshot_id TEXT PRIMARY KEY, report_id TEXT NOT NULL, collected_at TEXT NOT NULL, market_as_of TEXT, status TEXT, products_json TEXT, errors_json TEXT, payload_json TEXT);
 CREATE TABLE IF NOT EXISTS etf_preview_snapshots (snapshot_id TEXT PRIMARY KEY, collected_at TEXT NOT NULL, market_as_of TEXT, status TEXT, source TEXT, payload_json TEXT NOT NULL);
@@ -185,6 +186,7 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_worker ON research_runs(status, lease_expires_at, updated_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_queue ON research_runs(status, queue_position, created_at)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_market_snapshots_report ON etf_market_snapshots(report_id, collected_at DESC)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_briefing_assets_date ON daily_briefing_assets(as_of_date DESC, generated_at DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_etf_preview_snapshots ON etf_preview_snapshots(collected_at DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_status ON theme_candidates(status, updated_at DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_evidence_event ON candidate_evidence(event_id)")
@@ -1079,6 +1081,87 @@ class EvidenceStore:
             WHERE q.status='publishable' ORDER BY e.observed_at DESC"""
         ).fetchall()
         return [dict(zip(columns, row)) for row in rows]
+
+    def save_daily_briefing_asset(self, asset: dict) -> dict:
+        from hashlib import sha256
+
+        payload = dict(asset.get("payload") or {})
+        evidence_ids = sorted({str(value) for value in asset.get("evidence_ids", [])})
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        content_hash = sha256(payload_json.encode("utf-8")).hexdigest()
+        try:
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                """INSERT INTO daily_briefing_assets
+                (briefing_id,as_of_date,generated_at,evidence_ids_json,payload_json,content_hash)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(as_of_date) DO UPDATE SET
+                briefing_id=excluded.briefing_id,generated_at=excluded.generated_at,
+                evidence_ids_json=excluded.evidence_ids_json,payload_json=excluded.payload_json,
+                content_hash=excluded.content_hash""",
+                (
+                    asset["briefing_id"], asset["as_of_date"], asset["generated_at"],
+                    json.dumps(evidence_ids, ensure_ascii=False), payload_json, content_hash,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        saved = self.daily_briefing_asset(asset["as_of_date"])
+        assert saved is not None
+        return saved
+
+    def daily_briefing_asset(self, as_of_date: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT briefing_id,as_of_date,generated_at,evidence_ids_json,payload_json,content_hash
+            FROM daily_briefing_assets WHERE as_of_date=?""",
+            (as_of_date,),
+        ).fetchone()
+        return self._daily_briefing_asset_from_row(row)
+
+    def latest_daily_briefing_asset(self) -> dict | None:
+        row = self.conn.execute(
+            """SELECT briefing_id,as_of_date,generated_at,evidence_ids_json,payload_json,content_hash
+            FROM daily_briefing_assets ORDER BY as_of_date DESC,generated_at DESC LIMIT 1"""
+        ).fetchone()
+        return self._daily_briefing_asset_from_row(row)
+
+    @staticmethod
+    def _daily_briefing_asset_from_row(row: tuple | None) -> dict | None:
+        if row is None:
+            return None
+        keys = ("briefing_id", "as_of_date", "generated_at", "evidence_ids", "payload", "content_hash")
+        item = dict(zip(keys, row))
+        item["evidence_ids"] = json.loads(item["evidence_ids"])
+        item["payload"] = json.loads(item["payload"])
+        return item
+
+    def daily_briefing_exception_stats(self) -> dict:
+        quality_statuses = {
+            str(status): int(count)
+            for status, count in self.conn.execute(
+                """SELECT status,COUNT(*) FROM content_quality_results
+                WHERE status <> 'publishable' GROUP BY status ORDER BY status"""
+            )
+        }
+        health_rows = self.conn.execute(
+            """SELECT current.source_name,current.status,current.coverage_note
+            FROM connector_health AS current
+            WHERE current.status IN ('degraded','disabled') AND NOT EXISTS (
+                SELECT 1 FROM connector_health AS newer
+                WHERE newer.source_name=current.source_name
+                  AND (newer.checked_at>current.checked_at OR (newer.checked_at=current.checked_at AND newer.rowid>current.rowid))
+            ) ORDER BY current.source_name"""
+        ).fetchall()
+        return {
+            "quality_statuses": quality_statuses,
+            "source_health": [
+                {"source": str(source), "status": str(status), "coverage_note": str(note)}
+                for source, status, note in health_rows
+            ],
+        }
 
     def save_theme_coverage_cell(self, item: dict) -> None:
         self.conn.execute("""INSERT OR REPLACE INTO theme_coverage_cells

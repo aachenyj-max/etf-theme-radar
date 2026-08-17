@@ -19,6 +19,7 @@ from .info_agent import create_information_goal, run_information_goal
 from .models import utcnow
 from .ontology import refresh_research_assets
 from .pipeline import ingest
+from .reports import build_daily_briefing
 from .store import EvidenceStore
 from .theme_discovery import discover_theme_candidates
 
@@ -185,12 +186,19 @@ class SyncDiscoveryWorker:
             except Exception as exc:
                 store.update_discovery_run(discovery_run_id, status="failed", stage="finish_research", updated_at=utcnow(), error=str(exc))
                 raise
+            daily_briefing = None
             if str(run.get("idempotency_key") or "").startswith("daily:"):
+                daily_briefing = store.save_daily_briefing_asset(build_daily_briefing(
+                    store, as_of_date=until.isoformat(), generated_at=utcnow(),
+                ))
                 create_information_goal(
                     store, kind="daily", goal_id=f"information:daily:{until.isoformat()}",
                     now=utcnow(), scheduled_for=until.isoformat(),
                 )
-            store.update_sync_run(run["sync_run_id"], status="completed", progress=100, updated_at=utcnow(), result={"sources": results, "governance": governance, "research_assets": assets})
+            store.update_sync_run(run["sync_run_id"], status="completed", progress=100, updated_at=utcnow(), result={
+                "sources": results, "governance": governance, "research_assets": assets,
+                "daily_briefing_id": daily_briefing["briefing_id"] if daily_briefing else "",
+            })
         except Exception as exc:
             store.update_sync_run(run["sync_run_id"], status="failed", progress=0, updated_at=utcnow(), result=results, error=str(exc))
         finally:

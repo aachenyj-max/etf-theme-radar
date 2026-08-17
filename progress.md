@@ -494,6 +494,7 @@ flowchart LR
 - [ ] **任务 3.3：实现每日简报资产与首页 API**
   - 只收录通过完整性门的信息；支持主题/产业链/来源下钻及异常统计。
   - 运行：`python -m pytest tests/test_daily_briefing.py tests/test_api_contracts.py -q`。
+  - 2026-08-17：已完成测试先行的实现与 v16 文档同步，等待用户执行指定 pytest 回归后再勾选验收状态。
 - [ ] **任务 3.4：完善候选主题人工确认**
   - 聚类只创建候选；确认、拒绝、合并原子执行，终态不被后续发现覆盖。
   - 运行：`python -m pytest tests/test_theme_discovery.py tests/test_governance.py -q`。

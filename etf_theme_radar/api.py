@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from .connector_factory import configured_connectors
 from .models import utcnow
 from .pipeline import ingest
-from .reports import build_daily_brief
 from .store import EvidenceStore, RESEARCH_EXECUTION_STATUSES
 from .workflow import recover_interrupted_runs
 from .worker import stop_all_workers, worker_for, worker_status
@@ -51,7 +50,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-14.v15"
+CONTRACT_VERSION = "2026-08-17.v16"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -652,15 +651,54 @@ def review_entity(entity_id:str, request:EntityReviewRequest):
     if not changed: raise HTTPException(404,"实体不存在")
     return {"entity_id":entity_id,"review_status":request.decision}
 
+def _dashboard_facets(events: list[dict]) -> dict:
+    def values(key: str) -> list[dict]:
+        counts: dict[str, int] = {}
+        for event in events:
+            value = str(event.get(key) or "unknown")
+            counts[value] = counts.get(value, 0) + 1
+        return [{"value": value, "count": count} for value, count in sorted(counts.items())]
+
+    return {
+        "themes": values("theme"),
+        "industry_chains": values("industry_chain"),
+        "sources": values("source"),
+    }
+
+
 @app.get("/api/dashboard")
-def dashboard():
+def dashboard(theme: str = "", industry_chain: str = "", source: str = ""):
     store=_store()
     try:
-        events=store.publishable_events(); runs=store.research_runs(); reports=store.report_assets()
+        briefing_asset = store.latest_daily_briefing_asset()
+        runs=store.research_runs(); reports=store.report_assets()
+        exceptions = store.daily_briefing_exception_stats()
     finally: store.close()
-    governed=[item for item in events if item.get("relevance_status")=="relevant" and item.get("theme_assignment_status")=="assigned"]
+    if briefing_asset is None:
+        all_events: list[dict] = []
+        briefing = {"briefing_id": None, "as_of_date": None, "generated_at": None, "status": "not_available"}
+    else:
+        all_events = list((briefing_asset.get("payload") or {}).get("events") or [])
+        briefing = {
+            "briefing_id": briefing_asset["briefing_id"],
+            "as_of_date": briefing_asset["as_of_date"],
+            "generated_at": briefing_asset["generated_at"],
+            "status": "available",
+        }
+    filters = {"theme": theme, "industry_chain": industry_chain, "source": source}
+    events = [
+        event for event in all_events
+        if all(not value or str(event.get(field) or "").casefold() == value.casefold() for field, value in filters.items())
+    ]
     theme_items=_theme_payloads()
-    return {"metrics":{"themes":len(theme_items),"evidence":len(governed),"runs":len(runs),"reports":len(reports)},"themes":theme_items[:3],"runs":runs[:6],"generatedAt":utcnow()}
+    return {
+        "briefing": briefing,
+        "events": events,
+        "facets": _dashboard_facets(all_events),
+        "exceptions": exceptions,
+        "metrics":{"themes":len(theme_items),"evidence":len(events),"runs":len(runs),"reports":len(reports)},
+        "themes":theme_items[:3],"runs":runs[:6],"generatedAt":utcnow(),
+    }
 
 @app.get("/api/search")
 def global_search(q:str=Query(min_length=2,max_length=120),limit:int=Query(default=12,ge=1,le=30)):

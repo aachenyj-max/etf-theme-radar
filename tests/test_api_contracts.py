@@ -32,7 +32,7 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-14.v15"
+        assert payload["service"]["contract_version"] == "2026-08-17.v16"
         assert payload["llm"]["concurrency"]["lane_reservations"] == {
             "interactive": 10, "background": 2,
         }
@@ -149,13 +149,14 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-14.v15"
+    assert snapshot["contract_version"] == "2026-08-17.v16"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
     assert "content_quality_results" in snapshot["database_tables"]
     assert "extracted_facts" in snapshot["database_tables"]
     assert "extraction_exceptions" in snapshot["database_tables"]
     assert "independent_score_snapshots" in snapshot["database_tables"]
+    assert "daily_briefing_assets" in snapshot["database_tables"]
     assert "conversations" in snapshot["database_tables"]
     assert "conversation_messages" in snapshot["database_tables"]
     assert "conversation_links" in snapshot["database_tables"]
@@ -194,6 +195,7 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
         "healthy", "degraded", "disabled",
     ]
     assert {"GET", "/api/capabilities"} in [set(item) for item in snapshot["api_routes"]]
+    assert {"GET", "/api/dashboard"} in [set(item) for item in snapshot["api_routes"]]
     assert {"GET", "/api/reports/{report_id}/detail"} in [set(item) for item in snapshot["api_routes"]]
     assert {"POST", "/api/conversations"} in [set(item) for item in snapshot["api_routes"]]
     assert {"POST", "/api/conversations/{conversation_id}/messages"} in [

@@ -95,6 +95,10 @@ python -m etf_theme_radar.cli etf-preview-audit --db data/radar.db
 
 ## 故障排查
 
+### 每日简报首页
+
+`GET /api/dashboard` 只读取已持久化的 `daily_briefing_assets`，可用 `theme`、`industry_chain` 和 `source` 参数定位事实卡。空首页先检查当天 `daily:*` 同步是否已完成，再检查 `content_quality_results` 是否存在 `publishable` 记录；不要通过访问首页触发生成。`exceptions` 中的质量状态和 `degraded`/`disabled` 来源仅用于排查，不代表这些未通过质量门的信息已进入简报。
+
 - `SEC_USER_AGENT is required`：在本地 `.env` 中设置联系人型 User-Agent，且不要提交该文件。
 - Connector 状态为 `disabled`：检查环境变量中的开关；关闭可选来源不应影响 fixture 或其他来源。
 - 外部请求失败：保留错误记录，使用缓存或 fixture 验证流程，不得伪造抓取结果。
