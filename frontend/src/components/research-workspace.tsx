@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { Activity, AlertCircle, ArrowRight, CircleDot, FilePlus2, ListChecks, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { ResearchEntryPanel } from "@/components/research-entry-panel";
+import { ConversationResearchWorkspace } from "@/components/conversation-research-workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ResearchDraft, ResearchRunListItem, ResearchRunRecord, ResearchRunState, StreamConnectionState } from "@/lib/research-workflow";
@@ -85,7 +86,7 @@ function RunDetail({ run, connection, reviewPending, onReview, onCancel, onRerun
   </article>;
 }
 
-export function ResearchWorkspace() {
+export function LegacyResearchWorkspace() {
   const gateway = researchWorkflowGateway;
   const [runs, setRuns] = useState<ResearchRunListItem[]>([]);
   const [selectedRun, setSelectedRun] = useState<ResearchRunRecord | null>(null);
@@ -139,4 +140,8 @@ export function ResearchWorkspace() {
     </div>
     <Dialog.Root open={returnGate !== null} onOpenChange={(open) => { if (!open) { setReturnGate(null); setReturnNote(""); } }}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-ink/25 backdrop-blur-sm" /><Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-line bg-paper p-6 shadow-2xl outline-none"><Dialog.Title className="text-lg font-semibold text-ink">{returnGate === "report" ? "要求补充研究" : "调整主题边界"}</Dialog.Title><Dialog.Description className="mt-2 text-sm leading-6 text-muted">{returnGate === "report" ? "请具体说明缺少哪方面的证据、为何会影响判断。备注会写入审计记录，任务随后重新进入等待队列。" : "请说明主题定义或研究边界需要如何调整。备注会写入持久化审计记录。"}</Dialog.Description><label className="mt-5 block text-xs font-semibold text-ink">{returnGate === "report" ? "需要补充什么" : "需要调整什么"}<textarea aria-label="复核备注" autoFocus value={returnNote} onChange={(event) => setReturnNote(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-xl border border-line bg-canvas p-3 text-sm outline-none focus:border-signal" /></label><div className="mt-6 flex justify-end gap-2"><Dialog.Close asChild><Button variant="ghost">取消</Button></Dialog.Close><Button disabled={!returnNote.trim() || reviewPending} onClick={() => void confirmReturn()}>{reviewPending && <LoaderCircle className="h-4 w-4 animate-spin" />}{returnGate === "report" ? "提交并重新排队" : "提交调整"}</Button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
   </div>;
+}
+
+export function ResearchWorkspace() {
+  return <ConversationResearchWorkspace fallback={<LegacyResearchWorkspace />} />;
 }

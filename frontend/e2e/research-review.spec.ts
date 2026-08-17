@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/auth/session", route => route.fulfill({ json: { enabled: false, authenticated: true, username: "local" } }));
+  await page.route("**/api/conversations", route => route.fulfill({ status: 404, json: { detail: "not available in legacy fixture" } }));
+});
+
 const request = { topic:"机器人",objective:"analyze_etf_landscape_and_track_industry_momentum",sources:[],timeRange:"multi_horizon",outputType:"theme_report" };
 function run(status:string,stage:string,progress:number){return {run_id:"run-e2e",status,stage,progress,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),request,result:{theme_definition:{theme_id:"robotics",name:"机器人",description:"机器人产业采用研究",aliases:["robotics"],research_questions:["采用？","反方？","覆盖？"],model_used:false}},approvals:[],agent_runs:[],tool_calls:[],steps:[]};}
 async function mockResearchApi(page:Page){
@@ -84,4 +89,22 @@ test("报告可从资料库归档",async({page})=>{
   await expect(page.getByText("机器人主题研究")).toBeVisible();
   await page.getByRole("button",{name:"归档 机器人主题研究"}).click();
   await expect(page.getByText("报告已归档，可通过“已归档”筛选查看。")).toBeVisible();
+});
+
+test("研究台以对话流显示默认状态线与按需抽屉",async({page})=>{
+  const conversation={conversation_id:"conversation-a",user_id:"local",selected_theme_id:"robotics",title:"机器人产业链",status:"active",created_at:"2026-08-17T00:00:00+00:00",updated_at:"2026-08-17T00:01:00+00:00"};
+  await page.route("**/api/conversations",route=>route.fulfill({json:{conversations:[conversation,{...conversation,conversation_id:"conversation-b",title:"机器人 ETF 格局"}]}}));
+  await page.route("**/api/conversations/conversation-a/messages",route=>route.fulfill({json:{conversation_id:"conversation-a",messages:[{message_id:"message-a",conversation_id:"conversation-a",message_seq:1,role:"user",content:"产业链的反方证据是什么？",idempotency_key:"turn-a",goal_id:"goal-a",created_at:"2026-08-17T00:00:00+00:00"}]}}));
+  await page.route("**/api/conversations/conversation-a/events?**",route=>route.fulfill({json:{conversation_id:"conversation-a",last_event_id:2,events:[{event_id:1,goal_id:"goal-a",kind:"action_status",created_at:"2026-08-17T00:00:01+00:00",action:"正在验证引用",status:"running",elapsed_ms:840,source_count:2,tool_name:"",tool_status:"",safe_summary:"",raw_added:0,relevant_added:0,answer_chunk:""},{event_id:2,goal_id:"goal-a",kind:"answer_chunk",created_at:"2026-08-17T00:00:02+00:00",action:"",status:"",elapsed_ms:0,source_count:0,tool_name:"",tool_status:"",safe_summary:"",raw_added:0,relevant_added:0,answer_chunk:"现有证据仍不足以确认产业趋势。"}]}}));
+  await page.route("**/api/conversations/conversation-a/links",route=>route.fulfill({json:{conversation_id:"conversation-a",linked_conversation_ids:[],summaries:[]}}));
+  await page.goto("/research");
+
+  await expect(page.getByRole("complementary",{name:"研究对话"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"机器人产业链"})).toBeVisible();
+  await expect(page.getByText("正在验证引用")).toBeVisible();
+  await expect(page.getByText("来源 2")).toBeVisible();
+  await expect(page.getByText("现有证据仍不足以确认产业趋势。")).toBeVisible();
+  await page.getByRole("button",{name:"打开研究抽屉"}).click();
+  await expect(page.getByRole("complementary",{name:"研究抽屉"})).toBeVisible();
+  await expect(page.getByText("没有显式关联其他对话")).toBeVisible();
 });

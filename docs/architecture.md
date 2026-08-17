@@ -18,7 +18,7 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 研究响应路由不依赖模型自选：冻结上下文充分且无需最新数据时使用 `answer_now`；缺口不超过快速检索边界且存在直接来源时使用 `quick_retrieve`，最多去重选择 3 个来源，并在证据充分、来源全部检查或快速预算耗尽时停止；其余进入 `background_research`。后台模式把阶段性回答与缺口一起冻结在幂等 Goal payload 中，重复请求返回原回答/原 Goal。回答引用发布前取冻结 evidence ID 与本轮工具结果 ID 的并集校验，未知 ID 直接拒绝。
 
-对话实时流复用 `agent_events` 的全局递增 `event_id`，不新增临时内存队列。写入接口只接受白名单安全字段；读取按所属用户和 `conversation_id` 过滤，再以 `after_event_id` 增量返回。SSE `/stream` 与 JSON `/events` 共用同一游标，因此断线后轮询或重连不会重复已确认事件。旧 `research_runs` 快照流继续兼容，前端迁移在阶段 2 后续任务完成。
+对话实时流复用 `agent_events` 的全局递增 `event_id`，不新增临时内存队列。写入接口只接受白名单安全字段；读取按所属用户和 `conversation_id` 过滤，再以 `after_event_id` 增量返回。SSE `/stream` 与 JSON `/events` 共用同一游标，因此断线后轮询或重连不会重复已确认事件。研究工作台默认使用三栏对话视图：左侧选择对话，中部显示不可变消息、回答片段及行动/耗时/来源数，右侧按需展示安全审计和已授权关联摘要。仅在对话路由返回 404/405 时回退旧 `research_runs` 视图；后者继续作为兼容入口。
 
 总结任务复用后台 lane 的持久 `agent_goals`。每次回答把 `not_before_at` 推迟到最新防抖时间并合并 `target_message_seq`；Worker 到期后首次领取直接进入 `summarizing`。输出写入只追加的 `conversation_summary_versions` 与 `context_checkpoints` 前，必须验证数据库中的不可变消息副本、连续覆盖、source message、evidence ID 和上一版本。失败只返回 `rebuild_required`，不追加貌似完整的版本。`memories` 保存用户可控状态和版本，编辑/纠正创建新记录并以 `memory_relations.supersedes` 指向旧记录；正式研究资产不在该服务的写集合内。
 
