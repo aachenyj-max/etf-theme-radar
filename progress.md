@@ -460,7 +460,7 @@ flowchart LR
   - 每次回答后异步防抖；校验消息连续性、引用 ID 和上一版本；错配返回 `rebuild_required`。
   - 支持记忆固定、编辑、纠正、停用、删除和 supersede；不得写正式资产。
   - 运行：`python -m pytest tests/test_summary_agent.py tests/test_memory.py -q`。
-- [ ] **任务 2.6：实现显式跨对话关联**
+- [x] **任务 2.6：实现显式跨对话关联**
   - 默认关闭；按对话保存用户选择；只检索被授权的摘要，不自动读取原始对话全文。
   - 运行：`python -m pytest tests/test_conversations.py tests/test_context_builder.py -q`。
 - [ ] **任务 2.7：重塑研究工作台但保持视觉风格**
@@ -614,3 +614,4 @@ flowchart LR
 | 2026-08-14 | 阶段 2 / 任务 2.3 | `bd31a24` | RED：三模式路由、后台 Goal 与引用校验接口缺失；`python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`：9 passed；`python -m pytest -q`：149 passed；契约保持 40 张表、`2026-08-14.v13` | 无；研究 Agent v1 提示词、确定性三模式、quick 停止条件、阶段性回答优先与引用白名单已落地，任务 2.4 尚未开始 |
 | 2026-08-14 | 阶段 2 / 任务 2.4 | `5cddb6d` | RED：`conversation_event_stream` 缺失；API/对话回归：8 passed；`npm.cmd run test:e2e -- research-review.spec.ts`：5 passed；`python -m pytest -q`：151 passed；契约导出：40 张表、`2026-08-14.v14`；隔离验证首次启动、健康复用、端口占用失败三路径通过 | 无；动作状态、工具安全摘要、证据有效增量与回答片段均持久化并支持游标续传，任务 2.5 尚未开始 |
 | 2026-08-14 | 阶段 2 / 任务 2.5 | `a64cfb2` | RED：`summary_agent` 与 `memory` 模块缺失；`python -m pytest tests/test_summary_agent.py tests/test_memory.py -q`：6 passed；Agent Goal/队列扩展回归：22 passed；`python -m pytest -q`：157 passed；契约导出：44 张表、`2026-08-14.v14` | 无；持久防抖、不可变总结/检查点、连续性/引用/前版校验与记忆 supersede 生命周期已落地，任务 2.6 尚未开始 |
+| 2026-08-17 | 阶段 2 / 任务 2.6 | `c71d8e7` | RED：跨对话链接服务、GET/PUT 路由和 v15 契约缺失；`python -m pytest tests/test_conversations.py tests/test_context_builder.py -q`：9 passed；`python -m pytest -q`：160 passed；契约导出：45 张表、`2026-08-14.v15`；隔离端口验证首次启动、健康复用、非本项目端口占用可读失败三路径通过 | 无；默认关闭、同用户同主题原子选择、只读最新授权摘要且不返回原始消息已覆盖，任务 2.7 尚未开始 |
