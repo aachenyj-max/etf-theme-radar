@@ -487,9 +487,10 @@ flowchart LR
   - 保存正式提示词；每日/事件 Goal 运行规划循环，按治理后有效增量停止；结束前反方检查和缺口汇总。
   - 运行：`python -m pytest tests/test_info_agent.py tests/test_agent_runtime.py -q`。
   - 2026-08-17：正式提示词、每日/事件/后台信息 Goal、治理后有效增量停止、独立反方检查、缺口汇总和 ETF 预览优先调度已完成；外部测试验证后勾选。
-- [ ] **任务 3.2：实现主题覆盖矩阵和自动补缺 Goal**
+- [x] **任务 3.2：实现主题覆盖矩阵和自动补缺 Goal**
   - 持久化六类覆盖单元、状态、证据、原因和下一路径；不得用固定产业链模板表示已覆盖。
   - 运行：`python -m pytest tests/test_theme_coverage.py tests/test_theme_research_v2.py -q`。
+  - 2026-08-17：外部验证专项 8 passed、全量 170 passed；pytest 缓存路径编码警告不影响结果。
 - [ ] **任务 3.3：实现每日简报资产与首页 API**
   - 只收录通过完整性门的信息；支持主题/产业链/来源下钻及异常统计。
   - 运行：`python -m pytest tests/test_daily_briefing.py tests/test_api_contracts.py -q`。
