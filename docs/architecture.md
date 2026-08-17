@@ -22,6 +22,8 @@ Workflow 持有阶段、审批、取消、恢复、预算和最终状态；Pydan
 
 总结任务复用后台 lane 的持久 `agent_goals`。每次回答把 `not_before_at` 推迟到最新防抖时间并合并 `target_message_seq`；Worker 到期后首次领取直接进入 `summarizing`。输出写入只追加的 `conversation_summary_versions` 与 `context_checkpoints` 前，必须验证数据库中的不可变消息副本、连续覆盖、source message、evidence ID 和上一版本。失败只返回 `rebuild_required`，不追加貌似完整的版本。`memories` 保存用户可控状态和版本，编辑/纠正创建新记录并以 `memory_relations.supersedes` 指向旧记录；正式研究资产不在该服务的写集合内。
 
+`conversation_links` 是按源对话保存的显式允许集合，无记录即关闭。写入前一次性验证目标对话与源对话属于同一用户和同一主题，再在短事务中禁用旧集合并 upsert 新集合；验证失败不会改变原选择。关联检索联接目标对话的最新 `conversation_summary_versions`，返回摘要、关键词和覆盖范围，不联接 `conversation_messages`。上下文构建器仍执行第二层允许集合与用户 ACL 校验。
+
 单 Worker 的本地 DeepSeek 并发默认上限为 12，交互 lane 预留 10，后台信息规划/总结 lane 预留 2。429/503 将有效上限减半但不低于 2，并确保两个 lane 各保留一个槽；冷却后每次只恢复一个槽。静态边界通过 `/api/capabilities` 暴露。
 
 标准化事件在 ingest 事务中同步执行 `content-quality-v1` 完整性门。门只使用冻结原文和事件字段，检测空正文、标题式摘要、导航/页脚噪声比例、事件主体和动作；结果写入 `content_quality_results`。`publishable` 是首页证据、主题快照评分和正式研究选择的共同前置条件；`needs_enrichment` 与 `rejected` 继续保留原文和治理事件，供后续幂等重抽取，不以空成功覆盖。
@@ -51,7 +53,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 ### 服务身份与报告标识
 
 - 服务 ID：`etf-theme-radar`。
-- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 v12；任务 2.1 因新增多对话与不可变消息路由提升为 v13；任务 2.4 因新增对话事件轮询与 SSE 路由提升为 `2026-08-14.v14`。`/health` 与 `/api/capabilities` 必须报告相同版本。
+- 阶段 0 冻结时公共契约版本为 `2026-08-05.v9`。任务 1.1 因 `/api/capabilities` 新增 `llm.concurrency` 提升为 v10；任务 1.2 因首页证据语义和质量表契约变化提升为 v11；任务 1.6 因研究结果增加三个独立评分快照提升为 v12；任务 2.1 因新增多对话与不可变消息路由提升为 v13；任务 2.4 因新增对话事件轮询与 SSE 路由提升为 v14；任务 2.6 因新增跨对话关联 GET/PUT 路由提升为 `2026-08-14.v15`。`/health` 与 `/api/capabilities` 必须报告相同版本。
 - 新规范主题主报告使用 `theme-report:{theme_id}`。旧资产 `report:{run_id}` 仍是受支持标识；API 路由边界只解码一次，并通过 `run_registry` 定位独立运行数据库。`GET /api/reports/{report_id}/detail` 等报告路由不得将 `report:` 前缀改写成新标识。
 
 ### SQLite 表
@@ -71,6 +73,8 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 任务 2.1 当前应用表增加至 40 张，新增 `conversations` 与 `conversation_messages`；公开契约提升为 `2026-08-14.v13`。旧 `research_runs` 单执行槽继续用于普通主题研究，新的 `research_turn` 使用交互 lane 并按 `conversation_id` 串行。
 
 任务 2.5 当前应用表增加至 44 张，新增 `conversation_summary_versions`、`context_checkpoints`、`memories` 与 `memory_relations`。这些是内部持久运行时资产，公共契约保持 `2026-08-14.v14`。
+
+任务 2.6 当前应用表增加至 45 张，新增 `conversation_links`；公开契约提升为 `2026-08-14.v15`。
 
 阶段 1 的治理顺序固定为：持久 Goal 领取与 lease 隔离 → 原文完整性评估 → 逐条事实抽取审计 → 研究/刷新边界 → 独立评分持久化。历史回填复用同一质量与抽取函数，并以内容哈希、解析版本和恢复点保证幂等；任何下游报告都不能把未通过质量门、不可比 ETF 字段或 `not_assessed` 维度转换成肯定结论。
 

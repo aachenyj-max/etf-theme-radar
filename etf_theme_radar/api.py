@@ -51,7 +51,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-14.v14"
+CONTRACT_VERSION = "2026-08-14.v15"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -107,6 +107,8 @@ class ConversationCreateRequest(BaseModel):
 class ConversationMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
+class ConversationLinksRequest(BaseModel):
+    linked_conversation_ids: list[str] = Field(default_factory=list, max_length=100)
 
 def _request_user_id(request: Request) -> str:
     return str(getattr(request.state, "internal_username", "local"))
@@ -217,6 +219,40 @@ def list_conversation_messages(conversation_id: str, request: Request):
         except KeyError:
             raise HTTPException(404, "研究对话不存在")
         return {"conversation_id": conversation_id, "messages": messages}
+    finally:
+        store.close()
+
+@app.get("/api/conversations/{conversation_id}/links")
+def get_conversation_links(conversation_id: str, request: Request):
+    store = _store()
+    try:
+        user_id = _request_user_id(request)
+        try:
+            return {
+                "conversation_id": conversation_id,
+                "linked_conversation_ids": store.conversation_link_ids(conversation_id, user_id),
+                "summaries": store.linked_conversation_summaries(conversation_id, user_id),
+            }
+        except KeyError:
+            raise HTTPException(404, "研究对话不存在")
+    finally:
+        store.close()
+
+@app.put("/api/conversations/{conversation_id}/links")
+def update_conversation_links(
+    conversation_id: str, payload: ConversationLinksRequest, request: Request,
+):
+    store = _store()
+    try:
+        try:
+            return ConversationService(store).set_linked_conversations(
+                conversation_id, _request_user_id(request),
+                payload.linked_conversation_ids, updated_at=utcnow(),
+            )
+        except KeyError:
+            raise HTTPException(404, "研究对话不存在")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
     finally:
         store.close()
 

@@ -40,8 +40,9 @@
 | `context_checkpoints` | 与一个总结版本一一绑定的不可变压缩检查点；范围必须与已校验的连续消息覆盖一致。 |
 | `memories` | 用户长期记忆版本；保存来源消息、类别、个人/主题作用域、置信度、固定状态与 active/disabled/deleted/superseded 状态。 |
 | `memory_relations` | 记忆版本关系；当前只接受 `supersedes`，新版本指向被替代旧版本。 |
+| `conversation_links` | 当前对话显式允许读取的同用户、同主题对话集合；`enabled=0` 保留选择撤销审计，无记录即默认关闭。 |
 
-任务 2.5 为 44 张应用表，公共契约仍为 `2026-08-14.v14`。对话审计复用 `agent_events`，不创建临时流表；总结与检查点只追加，记忆删除为可审计软删除。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
+任务 2.6 为 45 张应用表，公共契约为 `2026-08-14.v15`。对话审计复用 `agent_events`，不创建临时流表；总结与检查点只追加，记忆删除和关联撤销均保留可审计状态。治理衍生表均保留对原始 evidence、主题或运行范围的引用；`rejected`、`incomplete`、异常队列、`not_comparable` 与 `not_assessed` 都是可审计状态，不等于删除或零值。
 
 当前已增加 `agent_runs` 和扩展后的 `tool_calls`，用于记录模型、prompt 哈希、token、停止原因、工具参数/结果摘要、重试、延迟与证据增量。后续迁移仍需增加：`source_items`、`entities`、`entity_aliases`、`entity_links`、`theme_aliases`、`theme_events`、`etfs`、`etf_filings`、`etf_holdings`、`indexes`、`securities`、`security_theme_exposure`、`patents`、`papers`、`job_postings`、`social_posts`、`forum_posts`、`index_methodologies`、`model_runs` 与 `human_feedback`。
 

@@ -207,3 +207,83 @@ def test_conversation_sse_resumes_after_persisted_event_id(tmp_path: Path, monke
     assert "event: answer_chunk" in event
     assert "第一段回答。" in event
     assert f"id: {first_id}" not in event
+
+
+def test_cross_conversation_links_default_off_and_expose_only_authorized_summaries(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "conversation-links.db")
+    service = ConversationService(store)
+    for conversation_id, user_id, theme_id in (
+        ("conversation-a", "user-a", "robotics"),
+        ("conversation-b", "user-a", "robotics"),
+        ("conversation-other-theme", "user-a", "semiconductors"),
+        ("conversation-foreign", "user-b", "robotics"),
+    ):
+        service.create_conversation(
+            conversation_id=conversation_id, user_id=user_id,
+            selected_theme_id=theme_id, created_at=CREATED_AT,
+        )
+    service.append_user_message(
+        conversation_id="conversation-b", user_id="user-a", message_id="message-b",
+        goal_id="goal-b", idempotency_key="turn-b", content="RAW FULL SECRET",
+        created_at=CREATED_AT,
+    )
+    store.save_conversation_summary(
+        conversation_id="conversation-b", user_id="user-a", created_at=CREATED_AT,
+        output={
+            "status": "completed", "conversation_summary": "授权摘要",
+            "memory_changes": [], "keywords": [], "related_theme_suggestions": [],
+            "compression_checkpoint": {}, "covered_from_seq": 1, "covered_to_seq": 1,
+            "previous_version_id": None, "source_message_ids": ["message-b"],
+        },
+    )
+
+    assert service.linked_summaries("conversation-a", "user-a") == []
+    selected = service.set_linked_conversations(
+        "conversation-a", "user-a", ["conversation-b"], updated_at=CREATED_AT,
+    )
+    summaries = service.linked_summaries("conversation-a", "user-a")
+
+    assert selected["linked_conversation_ids"] == ["conversation-b"]
+    assert summaries[0]["conversation_summary"] == "授权摘要"
+    assert summaries[0]["allowed_user_ids"] == ["user-a"]
+    assert "RAW FULL SECRET" not in json.dumps(summaries, ensure_ascii=False)
+    with pytest.raises(ValueError, match="same user and theme"):
+        service.set_linked_conversations(
+            "conversation-a", "user-a",
+            ["conversation-other-theme", "conversation-foreign"],
+            updated_at=CREATED_AT,
+        )
+    assert service.linked_summaries("conversation-a", "user-a") == summaries
+    store.close()
+
+
+def test_cross_conversation_link_api_saves_selection_per_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "conversation-links-api.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+    store = EvidenceStore(database)
+    service = ConversationService(store)
+    for conversation_id in ("conversation-a", "conversation-b"):
+        service.create_conversation(
+            conversation_id=conversation_id, user_id="local",
+            selected_theme_id="robotics", created_at=CREATED_AT,
+        )
+    store.close()
+
+    with TestClient(app) as client:
+        before = client.get("/api/conversations/conversation-a/links")
+        saved = client.put(
+            "/api/conversations/conversation-a/links",
+            json={"linked_conversation_ids": ["conversation-b"]},
+        )
+        after = client.get("/api/conversations/conversation-a/links")
+
+    assert before.status_code == 200
+    assert before.json()["linked_conversation_ids"] == []
+    assert saved.status_code == 200
+    assert after.json()["linked_conversation_ids"] == ["conversation-b"]
+    assert "messages" not in after.json()

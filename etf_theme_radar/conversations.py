@@ -36,3 +36,14 @@ class ConversationService:
 
     def messages(self, conversation_id: str, user_id: str) -> list[dict]:
         return self.store.conversation_messages(conversation_id, user_id)
+
+    def set_linked_conversations(
+        self, conversation_id: str, user_id: str, linked_conversation_ids: list[str],
+        *, updated_at: str,
+    ) -> dict:
+        return self.store.set_conversation_links(
+            conversation_id, user_id, linked_conversation_ids, updated_at=updated_at,
+        )
+
+    def linked_summaries(self, conversation_id: str, user_id: str) -> list[dict]:
+        return self.store.linked_conversation_summaries(conversation_id, user_id)

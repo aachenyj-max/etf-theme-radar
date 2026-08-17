@@ -77,3 +77,30 @@ def test_context_uses_fixed_trust_order_and_keeps_newest_messages_within_budget(
     assert context["estimated_tokens"] == 15
     assert context["token_budget"] == 18
     assert context["truncated_layers"] == ["recent_messages", "evidence", "etf_snapshots"]
+
+
+def test_context_never_includes_unselected_cross_conversation_summary() -> None:
+    linked = [
+        _item(
+            "summary-b", 2, conversation_id="conversation-b",
+            owner_user_id="user-a", allowed_user_ids=["user-a"],
+            conversation_summary="显式关联摘要",
+        ),
+        _item(
+            "summary-c", 2, conversation_id="conversation-c",
+            owner_user_id="user-a", allowed_user_ids=["user-a"],
+            conversation_summary="未关联摘要",
+        ),
+    ]
+    disabled = build_research_context(
+        user_id="user-a", conversation_id="conversation-a", token_budget=20,
+        theme_definition=_item("theme", 2), linked_summaries=linked,
+    )
+    enabled = build_research_context(
+        user_id="user-a", conversation_id="conversation-a", token_budget=20,
+        theme_definition=_item("theme", 2), linked_summaries=linked,
+        allowed_linked_conversation_ids={"conversation-b"},
+    )
+
+    assert all(layer["kind"] != "linked_summaries" for layer in disabled["layers"])
+    assert enabled["layers"][-1]["items"] == [linked[0]]

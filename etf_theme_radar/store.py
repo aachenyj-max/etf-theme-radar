@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS conversation_summary_versions (summary_version_id TEX
 CREATE TABLE IF NOT EXISTS context_checkpoints (checkpoint_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, summary_version_id TEXT NOT NULL UNIQUE, covered_from_seq INTEGER NOT NULL, covered_to_seq INTEGER NOT NULL, checkpoint_json TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS memories (memory_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, theme_id TEXT NOT NULL, category TEXT NOT NULL, scope TEXT NOT NULL, content TEXT NOT NULL, confidence REAL NOT NULL, status TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL, source_message_ids_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS memory_relations (from_memory_id TEXT NOT NULL, to_memory_id TEXT NOT NULL, relation_type TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(from_memory_id,to_memory_id,relation_type));
+CREATE TABLE IF NOT EXISTS conversation_links (conversation_id TEXT NOT NULL, linked_conversation_id TEXT NOT NULL, user_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(conversation_id,linked_conversation_id));
 CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_update BEFORE UPDATE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_delete BEFORE DELETE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS context_checkpoints_no_update BEFORE UPDATE ON context_checkpoints BEGIN SELECT RAISE(ABORT, 'context checkpoints are immutable'); END;
@@ -202,6 +203,7 @@ class EvidenceStore:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_context_checkpoints_conversation ON context_checkpoints(conversation_id,covered_to_seq DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(user_id,status,pinned DESC,updated_at DESC)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_relations_target ON memory_relations(to_memory_id,relation_type)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_links_enabled ON conversation_links(conversation_id,user_id,enabled)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -609,6 +611,100 @@ class EvidenceStore:
         ).fetchall()
         keys = ("from_memory_id", "to_memory_id", "relation_type", "created_at")
         return [dict(zip(keys, row)) for row in rows]
+
+    def conversation_link_ids(self, conversation_id: str, user_id: str) -> list[str]:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        rows = self.conn.execute(
+            """SELECT linked_conversation_id FROM conversation_links
+            WHERE conversation_id=? AND user_id=? AND enabled=1
+            ORDER BY linked_conversation_id""",
+            (conversation_id, user_id),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def set_conversation_links(
+        self, conversation_id: str, user_id: str, linked_conversation_ids: list[str],
+        *, updated_at: str,
+    ) -> dict:
+        source = self.conversation(conversation_id, user_id)
+        if source is None:
+            raise KeyError(conversation_id)
+        requested = sorted(set(str(item) for item in linked_conversation_ids))
+        if conversation_id in requested:
+            raise ValueError("linked conversations must belong to the same user and theme")
+        if requested:
+            marks = ",".join("?" for _ in requested)
+            rows = self.conn.execute(
+                f"""SELECT conversation_id,user_id,selected_theme_id FROM conversations
+                WHERE conversation_id IN ({marks})""",
+                tuple(requested),
+            ).fetchall()
+            eligible = {
+                str(row[0]) for row in rows
+                if str(row[1]) == user_id and str(row[2]) == source["selected_theme_id"]
+            }
+            if eligible != set(requested):
+                raise ValueError("linked conversations must belong to the same user and theme")
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                """UPDATE conversation_links SET enabled=0,updated_at=?
+                WHERE conversation_id=? AND user_id=?""",
+                (updated_at, conversation_id, user_id),
+            )
+            for target_id in requested:
+                self.conn.execute(
+                    """INSERT INTO conversation_links
+                    (conversation_id,linked_conversation_id,user_id,enabled,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(conversation_id,linked_conversation_id) DO UPDATE SET
+                    user_id=excluded.user_id,enabled=1,updated_at=excluded.updated_at""",
+                    (conversation_id, target_id, user_id, 1, updated_at, updated_at),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return {
+            "conversation_id": conversation_id,
+            "linked_conversation_ids": self.conversation_link_ids(conversation_id, user_id),
+        }
+
+    def linked_conversation_summaries(
+        self, conversation_id: str, user_id: str,
+    ) -> list[dict]:
+        if self.conversation(conversation_id, user_id) is None:
+            raise KeyError(conversation_id)
+        rows = self.conn.execute(
+            """SELECT s.summary_version_id,s.conversation_id,s.version,
+            s.covered_from_seq,s.covered_to_seq,s.summary_json
+            FROM conversation_links l
+            JOIN conversations c ON c.conversation_id=l.linked_conversation_id
+            JOIN conversation_summary_versions s ON s.conversation_id=c.conversation_id
+            WHERE l.conversation_id=? AND l.user_id=? AND l.enabled=1
+              AND c.user_id=?
+              AND s.version=(SELECT MAX(s2.version) FROM conversation_summary_versions s2
+                             WHERE s2.conversation_id=s.conversation_id)
+            ORDER BY s.conversation_id""",
+            (conversation_id, user_id, user_id),
+        ).fetchall()
+        result = []
+        for summary_version_id, target_id, version, covered_from, covered_to, summary_json in rows:
+            payload = json.loads(summary_json or "{}")
+            result.append({
+                "id": str(summary_version_id),
+                "summary_version_id": str(summary_version_id),
+                "conversation_id": str(target_id),
+                "version": int(version),
+                "covered_from_seq": int(covered_from),
+                "covered_to_seq": int(covered_to),
+                "conversation_summary": str(payload.get("conversation_summary") or ""),
+                "keywords": list(payload.get("keywords") or []),
+                "owner_user_id": user_id,
+                "allowed_user_ids": [user_id],
+            })
+        return result
 
     @staticmethod
     def _agent_goal_from_row(row: tuple | None) -> dict | None:

@@ -28,7 +28,7 @@
 
 Agent 只能调用注册的公开来源工具。统一主题研究默认最多 6 次模型请求、12 次工具调用和 480 秒，自动同时覆盖产业动量与 ETF 格局；来源优先级为现有证据/缓存、官方 ETF 持仓、天天基金快照、yfinance，再按缺口补学术、招聘、专利线索和反方检索。默认值位于 `config/defaults.yaml`。未配置 key 时流程使用确定性离线路径；401、模型不存在等配置错误会进入 `blocked_configuration`。
 
-通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v14` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看旧研究运行审计，通过对话消息返回的 `goal.goal_id` 检查新交互 Goal。响应不会包含 API key 或模型隐藏推理内容。
+通过固定 API `http://127.0.0.1:8001/api/capabilities` 检查服务身份、契约版本、Worker 心跳、`7/8` 来源覆盖、模型与工具注册状态；固定前端为 `http://127.0.0.1:3000`。当前契约 `2026-08-14.v15` 在 `llm.concurrency` 中报告总上限 12、交互/后台预留 10/2、最低并发 2 和冷却 30 秒。通过 `GET /api/research-runs/{run_id}` 查看旧研究运行审计，通过对话消息返回的 `goal.goal_id` 检查新交互 Goal。响应不会包含 API key 或模型隐藏推理内容。
 
 新入库事件的完整性结果可在 SQLite `content_quality_results` 中按 `event_id` 检查。首页证据数突然下降时，先按 `status`、`missing_fields_json` 和 `issues_json` 汇总，不要删除原始事件或手工改成 `publishable`。`needs_enrichment` 等待重抽取，`rejected` 仍保留原始文档用于审计；`config/defaults.yaml` 的 `maximum_boilerplate_ratio` 默认 0.25。
 
@@ -57,6 +57,8 @@ Agent Goal 的执行状态保存在 SQLite：`agent_goals` 是当前快照，`ag
 三响应模式诊断：`answer_now` 出现工具调用表示路由或调用方越界；`quick_retrieve` 的 `retrieval_sources` 最多 3 项，必须因证据充分、来源检查完成或快速预算耗尽停止；`background_research` 响应应先包含 `phase_answer_ready`，随后为 `background_goal_created`。重复同一消息序号时检查是否复用 `background_research:{conversation_id}:{message_seq}`。若回答被拒绝，核对 citations 是否都存在于冻结证据或本轮工具结果。任务 2.3 回归命令为 `python -m pytest tests/test_research_agent_modes.py tests/test_research_workflow.py tests/test_research_quality.py -q`。
 
 总结任务长期 queued 时，先检查其 `payload_json.not_before_at`；防抖窗口内不应被 Worker 领取，后续回答会复用同一 queued Goal 并更新 `target_message_seq`。进入 `rebuild_required` 时按错误原因检查消息是否连续、冻结消息是否仍与数据库一致、checkpoint 的 evidence ID 是否位于输入白名单，以及 `previous_version_id` 是否等于最新总结版本。不得手工补写总结或修改不可变检查点。记忆编辑和纠正必须产生新 `memory_id` 与 `supersedes` 关系；删除使用 `deleted` 软状态。任务 2.5 回归命令为 `python -m pytest tests/test_summary_agent.py tests/test_memory.py -q`，预期应用表为 44，公共契约仍为 `2026-08-14.v14`。
+
+跨对话默认不读取任何其他对话。使用 `GET /api/conversations/{conversation_id}/links` 核对当前显式选择和可用最新摘要，使用 `PUT` 同一路径整体替换选择；请求只接受同一账号、同一主题的目标 ID。422 表示目标越权、跨主题或包含当前对话，旧选择应保持不变。响应不得出现 `messages` 或目标对话原始内容。清空时提交空数组；写请求遇到网络错误不要自动重放。任务 2.6 回归命令为 `python -m pytest tests/test_conversations.py tests/test_context_builder.py -q`，预期应用表为 45、契约为 `2026-08-14.v15`。
 
 对话实时事件优先订阅 `GET /api/conversations/{conversation_id}/stream?after_event_id=<last>`；SSE 中断后使用 `GET /api/conversations/{conversation_id}/events?after_event_id=<last>` 轮询，再以返回的 `last_event_id` 续传。若出现重复事件，检查客户端是否错误重置游标；若缺事件，直接核对 `agent_events` 是否先持久化。工具事件只应包含安全摘要和两类证据增量。任务 2.4 回归包括 API 契约、`tests/test_conversations.py` 与 `frontend/e2e/research-review.spec.ts`。
 
