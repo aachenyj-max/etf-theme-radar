@@ -483,10 +483,10 @@ flowchart LR
 - 前端：`dashboard-workspace.tsx`、`theme-radar-workspace.tsx`、主题详情新组件、`etf-preview-workspace.tsx`、`app-shell.tsx`。
 - 测试：`tests/test_info_agent.py`、`tests/test_daily_briefing.py`、`tests/test_theme_coverage.py`、相关 E2E。
 
-- [ ] **任务 3.1：落地信息 Agent v1 与受限重规划**
+- [x] **任务 3.1：落地信息 Agent v1 与受限重规划**
   - 保存正式提示词；每日/事件 Goal 运行规划循环，按治理后有效增量停止；结束前反方检查和缺口汇总。
   - 运行：`python -m pytest tests/test_info_agent.py tests/test_agent_runtime.py -q`。
-  - 2026-08-17：实现与失败测试已提交，按用户要求未在本对话运行回归；在独立测试对话取得验证证据前不得勾选本任务或追加实施完成记录。
+  - 2026-08-17：正式提示词、每日/事件/后台信息 Goal、治理后有效增量停止、独立反方检查、缺口汇总和 ETF 预览优先调度已完成；外部测试验证后勾选。
 - [ ] **任务 3.2：实现主题覆盖矩阵和自动补缺 Goal**
   - 持久化六类覆盖单元、状态、证据、原因和下一路径；不得用固定产业链模板表示已覆盖。
   - 运行：`python -m pytest tests/test_theme_coverage.py tests/test_theme_research_v2.py -q`。
@@ -618,3 +618,4 @@ flowchart LR
 | 2026-08-17 | 阶段 2 / 任务 2.6 | `c71d8e7` | RED：跨对话链接服务、GET/PUT 路由和 v15 契约缺失；`python -m pytest tests/test_conversations.py tests/test_context_builder.py -q`：9 passed；`python -m pytest -q`：160 passed；契约导出：45 张表、`2026-08-14.v15`；隔离端口验证首次启动、健康复用、非本项目端口占用可读失败三路径通过 | 无；默认关闭、同用户同主题原子选择、只读最新授权摘要且不返回原始消息已覆盖，任务 2.7 尚未开始 |
 | 2026-08-17 | 阶段 2 / 任务 2.7 | `81ec8ba` | RED：对话研究工作台组件缺失；`cd frontend; npm.cmd run lint`：通过；`cd frontend; npm.cmd run test:e2e -- research-review.spec.ts`：6 passed | 无；左侧对话列表、中部不可变消息/审计流、行动/耗时/来源状态线和按需安全抽屉已落地；仅 404/405 回退旧任务视图，任务 2.8 尚未开始 |
 | 2026-08-17 | 阶段 2 / 任务 2.8 | `612945e` | `python tools/export_contract_snapshot.py`：45 张表、`2026-08-14.v15`；`python -m pytest -q`：160 passed；`cd frontend; npm.cmd run lint`：通过；任务 2.7 指定 E2E：6 passed | 无；阶段 2 已收口。全量前端 E2E 的 4 项依赖本机 8001 API；验证时 API 未运行而连接拒绝，未将其记为代码回归或修改启动器；不实施阶段 3 |
+| 2026-08-17 | 阶段 3 / 任务 3.1 | `ab0509b`、`62bdc33` | 外部验证：`python -m pytest tests/test_info_agent.py tests/test_agent_runtime.py -q`：15 passed；`python -m pytest -q`：168 passed。pytest 缓存路径编码警告不影响测试结果。契约保持 `2026-08-14.v15`、45 张表 | 无；任务 3.2 尚未开始 |
