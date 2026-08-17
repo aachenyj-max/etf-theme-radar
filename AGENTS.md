@@ -62,6 +62,7 @@ Windows 双击启动器只允许 API 端口 8001 和前端端口 3000，不得�
 - 研究任务与来源同步/主题发现分别由单进程持久 Worker 通过 SQLite lease 领取；API 只创建任务或执行原子状态操作。新增阶段必须支持幂等键、heartbeat、阶段级恢复和取消竞态测试，不得恢复“每个请求启动一个 Thread”的执行方式。
 - 信息、研究与总结 Agent 新任务统一写入 `agent_goals`，状态变化逐条追加 `agent_events`，执行占用写入 `concurrency_leases`。默认并发上限、交互/后台预留、最低降载值和冷却时间来自 `config/defaults.yaml`；429/503 只允许有界降载与冷却后逐步恢复，不得绕过 lane 预留或无限重试。
 - 信息 Agent 的 daily、event 与 background_research Goal 必须使用正式版本化提示词并由 `SyncDiscoveryWorker` 仅按 `information_collection` 类型领取。支持性采集只以 `content_quality_results.publishable` 的治理后有效增量重规划；连续无增量达到配置阈值即停止，仍须记录一次反方检查以及包含缺口、成因、影响和补证路径的安全汇总。取消必须在阶段边界确认，恢复不得重放已审计完成的来源调用。
+- 主题覆盖矩阵必须持久化来源多样性、反方证据、实体、时间连续性、实际产业链位置和 ETF 覆盖六类单元；`covered` 必须有对应治理后证据，产业链位置不得由固定模板填充。缺口补证 Goal 使用稳定幂等键，终态或人工取消不得被刷新覆盖。
 - 研究消息必须写入不可变 `conversation_messages`，以 `conversation_id + idempotency_key` 去重并分配连续 `message_seq`；消息和对应 `research_turn` Goal 必须在同一 SQLite 短事务创建。领取交互 Goal 时，同一 `conversation_id` 只允许一个未过期 lease，不同对话可占用不同交互槽；不得通过更新、删除旧消息或全局串行化掩盖顺序问题。
 - 研究上下文必须先对记忆、关联摘要和知识片段执行用户权限过滤，再按固定信任层级和 token 预算选择；跨对话摘要还必须匹配当前对话显式允许的 `conversation_id`。权限拒绝项不得以标题、ID 或预算占用形式泄漏；高信任层因预算截断后不得用低信任层填补。
 - 研究 Agent 的响应模式只允许 `answer_now`、`quick_retrieve`、`background_research`。冻结上下文足够时不得为展示动作调用工具；quick retrieve 只选择少量直接相关来源并按确定性停止条件结束；background research 必须先返回有据的阶段性回答，再用 `conversation_id + message_seq` 幂等创建后台信息 Goal。任何回答引用必须属于冻结输入或本轮工具返回 ID。

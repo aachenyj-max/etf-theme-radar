@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS context_checkpoints (checkpoint_id TEXT PRIMARY KEY, 
 CREATE TABLE IF NOT EXISTS memories (memory_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, theme_id TEXT NOT NULL, category TEXT NOT NULL, scope TEXT NOT NULL, content TEXT NOT NULL, confidence REAL NOT NULL, status TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL, source_message_ids_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS memory_relations (from_memory_id TEXT NOT NULL, to_memory_id TEXT NOT NULL, relation_type TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(from_memory_id,to_memory_id,relation_type));
 CREATE TABLE IF NOT EXISTS conversation_links (conversation_id TEXT NOT NULL, linked_conversation_id TEXT NOT NULL, user_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(conversation_id,linked_conversation_id));
+CREATE TABLE IF NOT EXISTS theme_coverage_cells (theme_id TEXT NOT NULL, coverage_kind TEXT NOT NULL, status TEXT NOT NULL, evidence_ids_json TEXT NOT NULL, reason TEXT NOT NULL, next_path TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(theme_id,coverage_kind));
 CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_update BEFORE UPDATE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS conversation_summary_versions_no_delete BEFORE DELETE ON conversation_summary_versions BEGIN SELECT RAISE(ABORT, 'conversation summary versions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS context_checkpoints_no_update BEFORE UPDATE ON context_checkpoints BEGIN SELECT RAISE(ABORT, 'context checkpoints are immutable'); END;
@@ -1078,6 +1079,11 @@ class EvidenceStore:
             WHERE q.status='publishable' ORDER BY e.observed_at DESC"""
         ).fetchall()
         return [dict(zip(columns, row)) for row in rows]
+
+    def save_theme_coverage_cell(self, item: dict) -> None:
+        self.conn.execute("""INSERT OR REPLACE INTO theme_coverage_cells
+        (theme_id,coverage_kind,status,evidence_ids_json,reason,next_path,updated_at) VALUES (?,?,?,?,?,?,?)""", (item["theme_id"], item["coverage_kind"], item["status"], json.dumps(item.get("evidence_ids", []), ensure_ascii=False), item["reason"], item["next_path"], item["updated_at"]))
+        self.commit()
 
     def save_extracted_fact(self, item: dict) -> None:
         self.conn.execute(
