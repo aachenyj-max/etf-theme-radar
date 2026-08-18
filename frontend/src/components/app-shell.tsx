@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BarChart3, Beaker, BookOpen, FileText, FolderSearch2, Home, Menu, Search, Settings, TableProperties, X } from "lucide-react";
+import { BarChart3, Beaker, BookOpen, FileText, FolderSearch2, Home, LibraryBig, Menu, Search, Settings, TableProperties, X } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ const navigation = [
   { href: "/research", label: "研究工作台", icon: FolderSearch2 },
   { href: "/evidence", label: "证据浏览器", icon: BookOpen },
   { href: "/reports", label: "报告库", icon: FileText },
+  { href: "/knowledge", label: "个人知识库", icon: LibraryBig },
   { href: "/product-studio", label: "ETF 产品工作室", icon: Beaker, beta: true }
 ];
 
