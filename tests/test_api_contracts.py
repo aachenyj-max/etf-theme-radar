@@ -28,7 +28,7 @@ def test_knowledge_api_is_private_by_default_and_confirms_share_before_write(tmp
         "folder_id": "private", "idempotency_key": "create-knowledge-1",
     }
     with TestClient(app) as client:
-        assert client.get("/health").json()["contract_version"] == "2026-08-18.v18"
+        assert client.get("/health").json()["contract_version"] == "2026-08-18.v19"
         created = client.post("/api/knowledge", json=payload)
         replay = client.post("/api/knowledge", json=payload)
         assert created.status_code == 201
@@ -54,6 +54,76 @@ def test_knowledge_api_is_private_by_default_and_confirms_share_before_write(tmp
         }).status_code == 409
 
 
+def test_global_search_returns_only_authorized_knowledge_and_no_retired_evidence_links(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "search-api.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    monkeypatch.setenv("KNOWLEDGE_FILES_DIR", str(tmp_path / "knowledge-files"))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+    payload = {
+        "kind": "note", "title": "机器人私有会议纪要",
+        "content_base64": base64.b64encode("机器人供应链资料".encode()).decode(),
+        "filename": "robotics.txt", "mime_type": "text/plain", "theme_id": "robotics",
+        "folder_id": "private", "idempotency_key": "search-knowledge-1",
+    }
+    with TestClient(app) as client:
+        created = client.post("/api/knowledge", json=payload)
+        assert created.status_code == 201
+
+        response = client.get("/api/search", params={"q": "机器人"})
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    knowledge = next(item for item in results if item["kind"] == "knowledge")
+    assert knowledge == {
+        "id": created.json()["knowledge_item_id"], "kind": "knowledge",
+        "title": "机器人私有会议纪要", "summary": "个人知识库资料", "href": "/knowledge",
+    }
+    assert all(not item["href"].startswith("/evidence") for item in results)
+    assert all(item["kind"] != "report" for item in results)
+
+
+def test_startup_migrates_legacy_personal_reports_to_local_only(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "legacy-startup.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    monkeypatch.setenv("KNOWLEDGE_FILES_DIR", str(tmp_path / "knowledge-files"))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+    store = EvidenceStore(database)
+    store.save_report_asset({
+        "report_id": "legacy-brief", "run_id": "", "title": "旧个人简报",
+        "kind": "evidence_brief", "theme_id": "robotics", "folder_id": "robotics",
+        "status": "completed", "tags": [], "summary": "需要迁入资料库",
+        "updated_at": "2026-08-18T00:00:00Z", "created_at": "2026-08-18T00:00:00Z",
+    })
+    store.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/knowledge")
+
+    assert response.status_code == 200
+    assert [(item["title"], item["kind"]) for item in response.json()["items"]] == [
+        ("旧个人简报", "legacy_report"),
+    ]
+
+
+def test_legacy_report_routes_do_not_leak_migrated_personal_asset(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "legacy-route-denial.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    monkeypatch.setenv("KNOWLEDGE_FILES_DIR", str(tmp_path / "knowledge-files"))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+    store = EvidenceStore(database)
+    store.save_report_asset({
+        "report_id": "legacy-private", "run_id": "", "title": "不应从报告路由泄漏的旧资料",
+        "kind": "evidence_brief", "theme_id": "robotics", "folder_id": "robotics",
+        "status": "completed", "tags": [], "summary": "仅能从 local 知识库受权读取",
+        "updated_at": "2026-08-18T00:00:00Z", "created_at": "2026-08-18T00:00:00Z",
+    })
+    store.close()
+
+    with TestClient(app) as client:
+        assert client.get("/api/reports/legacy-private").status_code == 404
+        assert client.get("/api/reports/legacy-private/detail").status_code == 404
+
+
 def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -> None:
     db = tmp_path / "api.db"
     monkeypatch.setenv("DATABASE_PATH", str(db))
@@ -71,7 +141,7 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-18.v18"
+        assert payload["service"]["contract_version"] == "2026-08-18.v19"
         assert payload["llm"]["concurrency"]["lane_reservations"] == {
             "interactive": 10, "background": 2,
         }
@@ -228,7 +298,7 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-18.v18"
+    assert snapshot["contract_version"] == "2026-08-18.v19"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
     assert "content_quality_results" in snapshot["database_tables"]
@@ -243,6 +313,8 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     assert "knowledge_item_versions" in snapshot["database_tables"]
     assert "knowledge_shares" in snapshot["database_tables"]
     assert "document_chunks" in snapshot["database_tables"]
+    assert "legacy_report_migrations" in snapshot["database_tables"]
+    assert "worker_heartbeats" in snapshot["database_tables"]
     assert snapshot["status_enums"]["content_quality"] == [
         "publishable", "needs_enrichment", "rejected",
     ]

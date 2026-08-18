@@ -382,7 +382,7 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
         <h1 className="mt-5 text-2xl font-semibold text-ink">{state === "not_found" ? "这份研究报告不存在" : "暂时无法读取报告"}</h1>
         <p className="mt-3 text-sm text-muted">{error}</p>
         <div className="mt-7 flex justify-center gap-3">
-          <Button variant="outline" asChild><Link href="/reports"><ArrowLeft className="h-4 w-4" />返回报告库</Link></Button>
+          <Button variant="outline" asChild><Link href="/theme-radar"><ArrowLeft className="h-4 w-4" />返回主题雷达</Link></Button>
           <Button onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw className="h-4 w-4" />重新加载</Button>
         </div>
       </div>
@@ -392,7 +392,7 @@ export function ReportDetailWorkspace({ reportId }: { reportId: string }) {
   return (
     <div className={cn("mx-auto max-w-[1480px] px-5 py-8 sm:px-8 sm:py-12 xl:px-12", state === "refreshing" && "opacity-70 transition")}>
       <nav className="flex items-center justify-between">
-        <Link href="/reports" className="inline-flex items-center gap-2 text-xs font-semibold text-muted hover:text-ink"><ArrowLeft className="h-4 w-4" />返回研究资料库</Link>
+        <Link href="/theme-radar" className="inline-flex items-center gap-2 text-xs font-semibold text-muted hover:text-ink"><ArrowLeft className="h-4 w-4" />返回主题雷达</Link>
         <Button variant="ghost" size="sm" onClick={() => { setSelectedVersion(undefined); setRefreshKey((value) => value + 1); }} disabled={state === "refreshing"}>
           <RefreshCw className={cn("h-3.5 w-3.5", state === "refreshing" && "animate-spin")} />同步最新版本
         </Button>

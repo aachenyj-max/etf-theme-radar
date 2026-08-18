@@ -39,7 +39,7 @@ test("主题确认、报告退回、重跑与通过",async({page})=>{
   await page.getByRole("button",{name:"提交并重新排队"}).click();
   await expect(page.getByText("报告已生成，等待你的复核")).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button",{name:"确认并发布"}).click();
-  await expect(page.getByRole("link",{name:/进入报告库/})).toBeVisible();
+  await expect(page.getByRole("link",{name:/查看主题报告/})).toBeVisible();
 });
 
 test("过期主题复核状态显示页内错误且不触发运行时异常",async({page})=>{
@@ -80,15 +80,11 @@ test("任务详情瞬时断线会重试且不触发运行时异常",async({page}
   expect(pageErrors).toEqual([]);
 });
 
-test("报告可从资料库归档",async({page})=>{
-  let archived=false;
-  const asset=()=>({report_id:"report:run-e2e",run_id:"run-e2e",title:"机器人主题研究",kind:"theme_report",theme_id:"robotics",folder_id:"robotics",status:archived?"archived":"watch",tags:["机器人"],summary:"可审计研究报告",updated_at:new Date().toISOString(),created_at:new Date().toISOString(),version:1,source_count:3,evidence_count:8,audit_passed:true});
-  await page.route("**/api/reports?**",route=>route.fulfill({json:{reports:archived?[]:[asset()],total_before_filters:1,active_count:archived?0:1,archived_count:archived?1:0,folders:[{id:"ai",report_count:0},{id:"energy",report_count:0},{id:"robotics",report_count:archived?0:1},{id:"healthcare",report_count:0}]}}));
-  await page.route("**/api/reports/report%3Arun-e2e",async route=>{archived=true;await route.fulfill({json:asset()});});
+test("旧报告库路由只显示迁移说明",async({page})=>{
   await page.goto("/reports");
-  await expect(page.getByText("机器人主题研究")).toBeVisible();
-  await page.getByRole("button",{name:"归档 机器人主题研究"}).click();
-  await expect(page.getByText("报告已归档，可通过“已归档”筛选查看。")).toBeVisible();
+  await expect(page.getByRole("heading",{name:"报告库已迁移"})).toBeVisible();
+  await expect(page.getByText("旧报告库不再支持重命名、归档或删除。")).toBeVisible();
+  await expect(page.getByRole("link",{name:"前往主题雷达"})).toBeVisible();
 });
 
 test("研究台以对话流显示默认状态线与按需抽屉",async({page})=>{

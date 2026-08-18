@@ -4,6 +4,7 @@ import os
 import socket
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,12 +28,32 @@ class DurableWorker:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name=f"etf-radar-worker-{id(self)}", daemon=True)
         self.last_heartbeat_at = ""
+        self._last_persisted_heartbeat = 0.0
 
     def start(self) -> None:
         if not self._thread.is_alive():
             self._thread.start()
         self.last_heartbeat_at = _timestamp()
+        self._publish_heartbeat(force=True)
         self.wake()
+
+    def _publish_heartbeat(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_persisted_heartbeat < 5.0:
+            return
+        store: EvidenceStore | None = None
+        try:
+            store = EvidenceStore(self.database_path)
+            self.last_heartbeat_at = _timestamp()
+            store.record_worker_heartbeat("research", self.owner, self.last_heartbeat_at)
+            self._last_persisted_heartbeat = now
+        except sqlite3.OperationalError:
+            # The durable loop already retries a locked queue. Its independent
+            # liveness pulse must follow the same rule, including database open.
+            return
+        finally:
+            if store is not None:
+                store.close()
 
     def wake(self) -> None:
         self._wake.set()
@@ -98,7 +119,7 @@ class DurableWorker:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self.last_heartbeat_at = _timestamp()
+            self._publish_heartbeat()
             try:
                 worked = self.run_once()
             except sqlite3.OperationalError:
@@ -148,9 +169,20 @@ def worker_status(database_path: str | Path) -> dict[str, object]:
     key = str(Path(database_path).resolve())
     with _LOCK:
         worker = _WORKERS.get(key)
-        return {
-            "status": "healthy" if worker and worker.is_alive else "stopped",
-            "alive": bool(worker and worker.is_alive),
-            "owner": worker.owner if worker else "",
-            "heartbeat_at": worker.last_heartbeat_at if worker else "",
-        }
+        if worker and worker.is_alive:
+            return {
+                "status": "healthy", "alive": True, "owner": worker.owner,
+                "heartbeat_at": worker.last_heartbeat_at,
+            }
+    store = EvidenceStore(database_path)
+    try:
+        heartbeat = store.worker_heartbeat("research")
+    finally:
+        store.close()
+    if heartbeat is None:
+        return {"status": "stopped", "alive": False, "owner": "", "heartbeat_at": ""}
+    try:
+        fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat["heartbeat_at"])).total_seconds() <= 30
+    except ValueError:
+        fresh = False
+    return {"status": "healthy" if fresh else "stopped", "alive": fresh, **heartbeat}

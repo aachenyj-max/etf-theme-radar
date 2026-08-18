@@ -26,11 +26,20 @@ from . import internal_auth
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     internal_auth.validate_configuration()
+    migration_store = _store()
+    try:
+        _knowledge_base(migration_store).migrate_legacy_personal_reports(
+            owner_user_id=os.getenv("LEGACY_REPORT_MIGRATION_OWNER", "local"),
+            migrated_at=utcnow(),
+        )
+    finally:
+        migration_store.close()
+    embedded_workers = os.getenv("EMBEDDED_WORKERS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     recovered = recover_interrupted_runs(_db())
-    worker = worker_for(_db())
-    if recovered:
+    worker = worker_for(_db()) if embedded_workers else None
+    if recovered and worker is not None:
         worker.wake()
-    sync_worker = sync_worker_for(_db())
+    sync_worker = sync_worker_for(_db()) if embedded_workers else None
     if os.getenv("STARTUP_SYNC_ENABLED","true").lower() in {"1","true","yes","on"}:
         store = _store()
         try:
@@ -43,16 +52,18 @@ async def lifespan(_app: FastAPI):
                 "window_start": (date.today() - timedelta(days=29)).isoformat(), "window_end": today,
             })
         finally: store.close()
-        sync_worker.wake()
+        if sync_worker is not None:
+            sync_worker.wake()
     try:
         yield
     finally:
-        stop_all_sync_workers()
-        stop_all_workers()
+        if embedded_workers:
+            stop_all_sync_workers()
+            stop_all_workers()
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-18.v18"
+CONTRACT_VERSION = "2026-08-18.v19"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -850,16 +861,35 @@ def dashboard(theme: str = "", industry_chain: str = "", source: str = ""):
     }
 
 @app.get("/api/search")
-def global_search(q:str=Query(min_length=2,max_length=120),limit:int=Query(default=12,ge=1,le=30)):
+def global_search(request: Request, q:str=Query(min_length=2,max_length=120),limit:int=Query(default=12,ge=1,le=30)):
     needle=q.casefold().strip(); store=_store()
     try:
-        evidence_items=[item for item in store.events() if needle in f"{item.get('title','')} {item.get('summary','')} {item.get('publisher','')}".casefold()][:limit]
-        report_items=[item for item in store.report_assets() if needle in f"{item.get('title','')} {item.get('summary','')} {' '.join(_event_list(item.get('tags')))}".casefold()][:limit]
         definitions=[item for item in store.theme_definitions() if needle in f"{item.get('name','')} {item.get('description','')} {' '.join(item.get('aliases',[]))}".casefold()][:limit]
+        knowledge_items = [
+            item for item in KnowledgePermissions(store).visible_items(_request_user_id(request))
+            if needle in f"{item['title']} {item['theme_id']} {item['kind']}".casefold()
+        ][:limit]
+        briefing = store.latest_daily_briefing_asset() or {}
+        briefing_items = [
+            item for item in (briefing.get("payload") or {}).get("events", [])
+            if needle in f"{item.get('title', '')} {item.get('summary', '')} {item.get('theme', '')}".casefold()
+        ][:limit]
+        etf_snapshot = store.latest_etf_preview_snapshot() or {}
+        etf_rows = etf_snapshot.get("products") or etf_snapshot.get("items") or []
+        etf_items = [
+            item for item in etf_rows
+            if needle in f"{item.get('name', '')} {item.get('fund_name', '')} {item.get('ticker', '')} {item.get('code', '')}".casefold()
+        ][:limit]
+        conversations = [
+            item for item in store.conversations(_request_user_id(request))
+            if needle in f"{item['title']} {item['selected_theme_id']}".casefold()
+        ][:limit]
     finally: store.close()
     results=[{"id":item["theme_id"],"kind":"theme","title":item["name"],"summary":item["description"],"href":f"/theme-radar?theme={item['theme_id']}"} for item in definitions]
-    results += [{"id":item["event_id"],"kind":"evidence","title":item["title"],"summary":item.get("summary","")[:180],"href":f"/evidence?evidence={item['event_id']}"} for item in evidence_items]
-    results += [{"id":item["report_id"],"kind":"report","title":item["title"],"summary":item.get("summary","")[:180],"href":f"/reports/{item['report_id']}"} for item in report_items]
+    results += [{"id":str(item.get("event_id") or item.get("id") or "briefing-event"),"kind":"briefing","title":str(item.get("title") or "每日信息"),"summary":str(item.get("summary") or "每日简报事件")[:180],"href":"/"} for item in briefing_items]
+    results += [{"id":str(item.get("fund_code") or item.get("code") or item.get("ticker") or item.get("name") or "etf"),"kind":"etf","title":str(item.get("name") or item.get("fund_name") or item.get("ticker") or "ETF 产品"),"summary":"ETF 预览快照", "href":"/etf-preview"} for item in etf_items]
+    results += [{"id":item["conversation_id"],"kind":"conversation","title":item["title"] or "未命名研究对话","summary":f"主题：{item['selected_theme_id']}","href":f"/research?conversation={item['conversation_id']}"} for item in conversations]
+    results += [{"id":item["knowledge_item_id"],"kind":"knowledge","title":item["title"],"summary":"个人知识库资料","href":"/knowledge"} for item in knowledge_items]
     return {"query":q,"results":results[:limit],"count":min(len(results),limit)}
 @app.post("/api/reports/daily")
 def daily_report():
@@ -874,7 +904,7 @@ def report_library(
 ):
     store = _store()
     try:
-        reports = store.report_assets()
+        reports = [item for item in store.report_assets() if item.get("kind") == "theme_report"]
     finally:
         store.close()
     all_reports = reports
@@ -903,28 +933,12 @@ def report_library(
         "active_count":len([item for item in all_reports if item["status"] != "archived"]),
         "archived_count":len([item for item in all_reports if item["status"] == "archived"]),
         "folders":folders,
-        "note":"研究资产只读列表；正文与证据附件按 run_id 关联",
+        "note":"仅保留正式主题报告的只读兼容列表；请从主题详情查看规范版本链",
     }
 
 @app.post("/api/reports/assistant")
 def report_library_assistant(request:ReportAssistantRequest):
-    store = _store()
-    try:
-        reports = store.report_assets()
-    finally:
-        store.close()
-    command = request.command.casefold()
-    if "机器人" in command or "robotics" in command:
-        matched = [item for item in reports if item["folder_id"] == "robotics" and item["status"] != "archived"]
-        return {"title":"机器人研究","summary":f"找到 {len(matched)} 份机器人研究。","matchedReportIds":[item["report_id"] for item in matched],"suggestedFilters":{"folder":"robotics","query":""}}
-    if ("比较" in command or "compare" in command) and "ai" in command:
-        matched = [item for item in reports if item["folder_id"] == "ai" and "ETF" in item["tags"] and item["status"] != "archived"]
-        return {"title":"AI ETF 报告对比","summary":f"找到 {len(matched)} 份可用于对比的 AI ETF 研究。","matchedReportIds":[item["report_id"] for item in matched],"suggestedFilters":{"folder":"ai","query":"ETF"}}
-    if "变化" in command or "changes" in command or "更新" in command:
-        matched = [item for item in reports if item["status"] != "archived"][:3]
-        return {"title":"最近研究变化","summary":f"找到最近更新的 {len(matched)} 份研究文件。","matchedReportIds":[item["report_id"] for item in matched],"suggestedFilters":{"dateRange":"30d","query":""}}
-    matched = [item for item in reports if command in f"{item['title']} {item['theme_id']} {item['tags']}".casefold()]
-    return {"title":"资料库搜索结果","summary":f"找到 {len(matched)} 份相关研究。" if matched else "没有找到直接匹配项。","matchedReportIds":[item["report_id"] for item in matched],"suggestedFilters":{"query":request.command} if matched else None}
+    raise HTTPException(410, "旧报告库助手已停止；请使用全局搜索或主题详情")
 
 @app.get("/api/reports/{report_id}")
 def get_report_asset(report_id:str):
@@ -933,7 +947,8 @@ def get_report_asset(report_id:str):
         report = store.report_asset(report_id)
     finally:
         store.close()
-    if not report: raise HTTPException(404,"报告不存在或已经删除")
+    if not report or report.get("kind") != "theme_report":
+        raise HTTPException(404,"报告不存在或已经删除")
     return report
 
 REPORT_THEME_LABELS = {
@@ -1175,8 +1190,10 @@ def get_report_detail(report_id:str, version:int|None=Query(default=None,ge=1)):
     store = _report_store(report_id)
     try:
         report = store.report_asset(report_id)
-        versions = store.report_versions(report_id) if report else []
-        latest_market_snapshot = store.latest_etf_market_snapshot(report_id) if report else None
+        if not report or report.get("kind") != "theme_report":
+            raise HTTPException(404,"报告不存在或已经删除")
+        versions = store.report_versions(report_id)
+        latest_market_snapshot = store.latest_etf_market_snapshot(report_id)
         selected_version = next((item for item in versions if item["version"] == version), None) if version else (versions[0] if versions else None)
         if version and not selected_version:
             raise HTTPException(404,"报告版本不存在")
@@ -1194,7 +1211,6 @@ def get_report_detail(report_id:str, version:int|None=Query(default=None,ge=1)):
             run = store.research_run(report["run_id"]) if report and report.get("run_id") else None
     finally:
         store.close()
-    if not report: raise HTTPException(404,"报告不存在或已经删除")
     return _report_detail_payload(report, run, latest_market_snapshot)
 
 @app.post("/api/reports/{report_id}/market-snapshot", status_code=202)
@@ -1202,7 +1218,7 @@ def refresh_report_market_snapshot(report_id: str):
     store = _report_store(report_id)
     try:
         report = store.report_asset(report_id)
-        if not report:
+        if not report or report.get("kind") != "theme_report":
             raise HTTPException(404, "报告不存在或已经删除")
         existing = next(
             (
@@ -1239,7 +1255,8 @@ def refresh_report_market_snapshot(report_id: str):
 def get_report_versions(report_id:str):
     store=_report_store(report_id)
     try:
-        if not store.report_asset(report_id): raise HTTPException(404,"报告不存在或已经删除")
+        report = store.report_asset(report_id)
+        if not report or report.get("kind") != "theme_report": raise HTTPException(404,"报告不存在或已经删除")
         versions=store.report_versions(report_id)
         claims=store.report_claims(report_id)
     finally: store.close()
@@ -1277,7 +1294,8 @@ def _version_change_payload(left:dict,right:dict) -> dict:
 def report_version_timeline(report_id:str):
     store=_report_store(report_id)
     try:
-        if not store.report_asset(report_id): raise HTTPException(404,"报告不存在或已经删除")
+        report = store.report_asset(report_id)
+        if not report or report.get("kind") != "theme_report": raise HTTPException(404,"报告不存在或已经删除")
         versions=sorted(store.report_versions(report_id),key=lambda item:item["version"])
     finally: store.close()
     items=[]
@@ -1296,7 +1314,10 @@ def report_version_timeline(report_id:str):
 @app.get("/api/reports/{report_id}/compare")
 def compare_report_versions(report_id:str, left:int=Query(ge=1), right:int=Query(ge=1)):
     store=_report_store(report_id)
-    try: versions={item["version"]:item for item in store.report_versions(report_id)}
+    try:
+        report = store.report_asset(report_id)
+        if not report or report.get("kind") != "theme_report": raise HTTPException(404,"报告不存在或已经删除")
+        versions={item["version"]:item for item in store.report_versions(report_id)}
     finally: store.close()
     if left not in versions or right not in versions: raise HTTPException(404,"报告版本不存在")
     left_lines=set(versions[left]["markdown"].splitlines()); right_lines=set(versions[right]["markdown"].splitlines())
@@ -1304,24 +1325,11 @@ def compare_report_versions(report_id:str, left:int=Query(ge=1), right:int=Query
 
 @app.patch("/api/reports/{report_id}")
 def update_report_asset(report_id:str, request:ReportUpdateRequest):
-    if request.title is None and request.status is None: raise HTTPException(422,"没有可更新字段")
-    store = _report_store(report_id)
-    try:
-        report = store.update_report_asset(report_id,title=request.title,status=request.status,updated_at=utcnow())
-    finally:
-        store.close()
-    if not report: raise HTTPException(404,"报告不存在或已经删除")
-    return report
+    raise HTTPException(410, "报告库编辑已停止；正式主题报告仅通过审核追加规范版本")
 
 @app.delete("/api/reports/{report_id}")
 def delete_report_asset(report_id:str):
-    store = _report_store(report_id)
-    try:
-        deleted = store.soft_delete_report_asset(report_id,utcnow())
-    finally:
-        store.close()
-    if not deleted: raise HTTPException(404,"报告不存在或已经删除")
-    return {"report_id":report_id,"status":"deleted","recoverable":True}
+    raise HTTPException(410, "报告库删除已停止；旧个人内容已迁入个人知识库")
 
 THEME_LIBRARY_META = {
     "ai-infrastructure": ("AI 基础设施主题研究", "ai", ["AI", "数据中心", "ETF"]),

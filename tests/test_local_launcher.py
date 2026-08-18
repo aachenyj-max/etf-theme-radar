@@ -35,7 +35,7 @@ def test_e2e_server_disables_next_lock_only_for_its_own_process() -> None:
 
 def test_launcher_reuses_only_matching_contract_with_worker_heartbeat() -> None:
     launcher = (PROJECT_ROOT / "tools" / "start_local.ps1").read_text(encoding="utf-8")
-    assert '$contractVersion = "2026-08-18.v18"' in launcher
+    assert '$contractVersion = "2026-08-18.v19"' in launcher
     assert "api/capabilities" in launcher
     assert 'service.id -eq $serviceId' in launcher
     assert 'service.contract_version -eq $contractVersion' in launcher

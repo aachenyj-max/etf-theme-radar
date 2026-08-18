@@ -10,6 +10,7 @@ services:
         required: false
     environment:
       DATABASE_PATH: /app/data/radar.db
+      EMBEDDED_WORKERS_ENABLED: "false"
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://127.0.0.1:8080}
       PUBLIC_FRONTEND_URL: ${PUBLIC_FRONTEND_URL:-http://127.0.0.1:8080}
     volumes:
@@ -30,6 +31,27 @@ services:
       retries: 8
       start_period: 20s
 
+  worker:
+    build:
+      context: .
+      target: api
+    env_file:
+      - path: deploy/.env.production
+        required: false
+    environment:
+      DATABASE_PATH: /app/data/radar.db
+      EMBEDDED_WORKERS_ENABLED: "false"
+    volumes:
+      - radar_data:/app/data
+    command: ["python", "-m", "etf_theme_radar.production_worker"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
   frontend:
     build:
       context: .
@@ -39,6 +61,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      worker:
+        condition: service_started
     expose:
       - "3000"
     restart: unless-stopped

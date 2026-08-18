@@ -1,5 +1,6 @@
 from etf_theme_radar.store import EvidenceStore
 from etf_theme_radar.api import _register_theme_report
+from etf_theme_radar.knowledge_base import KnowledgeBase
 
 
 def test_report_asset_lifecycle(tmp_path):
@@ -64,4 +65,38 @@ def test_verified_research_appends_one_canonical_theme_report_version_chain(tmp_
     assert asset["summary"] == "第二版结论"
     assert [item["version"] for item in store.report_versions(asset["report_id"])] == [2,1]
     assert len(store.report_assets()) == 1
+    store.close()
+
+
+def test_legacy_personal_reports_migrate_once_to_local_and_exclude_theme_reports(tmp_path):
+    store = EvidenceStore(tmp_path / "legacy-reports.db")
+    store.save_report_asset({
+        "report_id": "legacy-note", "run_id": "", "title": "机器人旧资料",
+        "kind": "evidence_brief", "theme_id": "robotics", "folder_id": "robotics",
+        "status": "completed", "tags": ["机器人"], "summary": "旧个人保存内容",
+        "updated_at": "2026-08-18T00:00:00Z", "created_at": "2026-08-18T00:00:00Z",
+    })
+    store.save_report_asset({
+        "report_id": "theme-report:robotics", "run_id": "run-robotics", "title": "机器人正式主题报告",
+        "kind": "theme_report", "theme_id": "robotics", "folder_id": "robotics",
+        "status": "completed", "tags": ["机器人"], "summary": "规范版本链",
+        "updated_at": "2026-08-18T00:00:00Z", "created_at": "2026-08-18T00:00:00Z",
+    })
+    library = KnowledgeBase(store, files_root=tmp_path / "knowledge-files")
+
+    first = library.migrate_legacy_personal_reports(owner_user_id="local", migrated_at="2026-08-18T01:00:00Z")
+    second = library.migrate_legacy_personal_reports(owner_user_id="local", migrated_at="2026-08-18T01:01:00Z")
+
+    assert first == {"migrated": ["legacy-note"], "skipped_formal": ["theme-report:robotics"]}
+    assert second == {"migrated": [], "skipped_formal": ["theme-report:robotics"]}
+    migrated = store.conn.execute(
+        "SELECT owner_user_id,legacy_report_id,knowledge_item_id FROM legacy_report_migrations"
+    ).fetchone()
+    assert migrated is not None and migrated[0:2] == ("local", "legacy-note")
+    item = library.item(migrated[2], "local")
+    assert item is not None and item["title"] == "机器人旧资料"
+    assert "旧个人保存内容".encode() in (library.read_content(migrated[2], "local") or b"")
+    assert store.conn.execute(
+        "SELECT COUNT(*) FROM legacy_report_migrations WHERE legacy_report_id='theme-report:robotics'"
+    ).fetchone()[0] == 0
     store.close()

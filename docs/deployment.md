@@ -1,6 +1,6 @@
 # 内部试用部署手册
 
-本手册适用于约 5 位内部用户。当前运行模型是**单台常驻 Linux 主机、一个 API/Worker 实例和本机 SSD 上的 SQLite**。不要把 `data/radar.db` 放到 NFS、SMB 或多主机共享卷，也不要增加 Uvicorn worker 数或 Compose 副本数。
+本手册适用于约 5 位内部用户。当前运行模型是**单台常驻 Linux 主机、一个 API、一个独立持久 Worker、Next.js、Caddy 和本机 SSD 上的 SQLite**。不要把 `data/radar.db` 放到 NFS、SMB 或多主机共享卷，也不要增加 Uvicorn worker 数或 Compose 副本数。生产 API 显式关闭内嵌 Worker，只有独立 Worker 进程领取 SQLite lease。
 
 ## 上线前准备
 
@@ -15,7 +15,7 @@
 ```bash
 cp deploy/.env.production.example deploy/.env.production
 chmod 600 deploy/.env.production
-# 编辑 deploy/.env.production：填入真实 key、SEC 联系方式、OpenAlex 邮箱与正式地址。
+# 编辑 deploy/.env.production：填入真实 key、SEC 联系方式、OpenAlex 邮箱与正式地址；保留 LEGACY_REPORT_MIGRATION_OWNER=local。
 
 docker compose --env-file deploy/.env.production -f compose.production.yml build
 docker compose --env-file deploy/.env.production -f compose.production.yml up -d
@@ -42,7 +42,7 @@ docker compose --env-file deploy/.env.production -f compose.production.yml -f co
 ```bash
 docker compose --env-file deploy/.env.production -f compose.production.yml --profile maintenance run --rm backup
 docker compose --env-file deploy/.env.production -f compose.production.yml up -d --build
-docker compose --env-file deploy/.env.production -f compose.production.yml logs --tail=100 api frontend caddy
+docker compose --env-file deploy/.env.production -f compose.production.yml logs --tail=100 api worker frontend caddy
 ```
 
 挂载持久卷时部署会有短暂中断；这符合当前 SQLite 单实例的安全边界。若健康检查、Worker 心跳或业务验收失败，使用上一版镜像重新执行 `up -d`，不要并行运行两个 API 容器。
@@ -58,7 +58,7 @@ docker compose --env-file deploy/.env.production -f compose.production.yml --pro
 建议每天至少一次，并将生成的 `backups/radar-*.db` 和同名 `.json` 加密复制到异地。恢复前必须停掉服务、保留当前数据卷快照，并执行恢复演练：
 
 ```bash
-docker compose --env-file deploy/.env.production -f compose.production.yml stop caddy frontend api
+docker compose --env-file deploy/.env.production -f compose.production.yml stop caddy frontend api worker
 docker compose --env-file deploy/.env.production -f compose.production.yml --profile maintenance run --rm --no-deps restore \
   --backup /backups/radar-YYYYMMDDTHHMMSSZ.db \
   --target /app/data/radar.db \
@@ -73,8 +73,8 @@ docker compose --env-file deploy/.env.production -f compose.production.yml up -d
 - 未登录或非公司账号无法触及入口及 API。
 - 5 位用户并发浏览、同时创建任务时，一个任务执行、其余 FIFO 排队。
 - 研究运行中的 SSE 至少保持 15 分钟；断线后页面回退轮询。
-- 在采集、分析、审计阶段各重启一次 API，确认 lease 和 Worker 可以恢复且不产生重复版本。
+- 在采集、分析、审计阶段各重启一次 API 或 Worker，确认 lease、外置 Worker 心跳和恢复均不产生重复版本。
 - 演练 DeepSeek、Yahoo、天天基金和 OpenAlex 超时/限流，确认状态降级且最后成功快照不被覆盖。
-- 将备份恢复到独立环境，核对报告版本、引用、主题和证据数量。
+- 将备份恢复到独立环境，核对报告版本、引用、主题、证据、知识文件哈希和 ACL；生产目标不得作为首次恢复演练。
 
 当前应用提供统一权限的内部账号、签名 HttpOnly 会话 Cookie 和跨站写操作来源校验；五个账号均可浏览和使用全部页面。正式扩大使用前，仍建议把用户身份写入审核和发布审计记录，并根据岗位增加角色权限。

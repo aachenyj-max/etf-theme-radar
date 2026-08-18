@@ -340,3 +340,56 @@ class KnowledgeBase:
             self.store.conn.rollback()
             raise
         return chunks
+
+    def _legacy_report_content(self, report: dict) -> bytes:
+        row = self.store.conn.execute(
+            """SELECT markdown FROM report_versions WHERE report_id=?
+            ORDER BY version DESC LIMIT 1""",
+            (report["report_id"],),
+        ).fetchone()
+        markdown = str(row[0]) if row and row[0] else ""
+        if not markdown:
+            markdown = f"# {report['title']}\n\n{report.get('summary') or ''}\n"
+        return markdown.encode("utf-8")
+
+    def migrate_legacy_personal_reports(
+        self, *, owner_user_id: str, migrated_at: str,
+    ) -> dict[str, list[str]]:
+        """Idempotently move pre-library personal reports into the owner's private library."""
+        migrated: list[str] = []
+        skipped_formal: list[str] = []
+        for report in self.store.report_assets():
+            report_id = str(report["report_id"])
+            if report.get("kind") == "theme_report":
+                skipped_formal.append(report_id)
+                continue
+            existing = self.store.conn.execute(
+                """SELECT knowledge_item_id FROM legacy_report_migrations
+                WHERE owner_user_id=? AND legacy_report_id=?""",
+                (owner_user_id, report_id),
+            ).fetchone()
+            if existing is not None:
+                continue
+            content = self._legacy_report_content(report)
+            digest = hashlib.sha256(f"{owner_user_id}:{report_id}".encode("utf-8")).hexdigest()
+            item = self.create_item(
+                item_id=f"legacy-{digest[:24]}", owner_user_id=owner_user_id,
+                kind="legacy_report", title=str(report["title"]), content=content,
+                filename=f"legacy-{digest[:12]}.md", mime_type="text/markdown",
+                theme_id=str(report.get("theme_id") or ""), folder_id="legacy-reports",
+                created_at=migrated_at, idempotency_key=f"legacy-report:{report_id}",
+            )
+            try:
+                self.parse_current_version(item["knowledge_item_id"], owner_user_id)
+            except ValueError:
+                # The item remains versioned and auditable even if later parsing is unavailable.
+                pass
+            self.store.conn.execute(
+                """INSERT OR IGNORE INTO legacy_report_migrations
+                (owner_user_id,legacy_report_id,knowledge_item_id,source_content_hash,migrated_at)
+                VALUES (?,?,?,?,?)""",
+                (owner_user_id, report_id, item["knowledge_item_id"], self._hash(content), migrated_at),
+            )
+            self.store.conn.commit()
+            migrated.append(report_id)
+        return {"migrated": migrated, "skipped_formal": skipped_formal}

@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BarChart3, Beaker, BookOpen, FileText, FolderSearch2, Home, LibraryBig, Menu, Search, Settings, TableProperties, X } from "lucide-react";
+import { BarChart3, FolderSearch2, Home, LibraryBig, Menu, Search, Settings, TableProperties, X } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +16,7 @@ const navigation = [
   { href: "/theme-radar", label: "主题雷达", icon: BarChart3 },
   { href: "/etf-preview", label: "ETF 预览", icon: TableProperties },
   { href: "/research", label: "研究工作台", icon: FolderSearch2 },
-  { href: "/evidence", label: "证据浏览器", icon: BookOpen },
-  { href: "/reports", label: "报告库", icon: FileText },
-  { href: "/knowledge", label: "个人知识库", icon: LibraryBig },
-  { href: "/product-studio", label: "ETF 产品工作室", icon: Beaker, beta: true }
+  { href: "/knowledge", label: "个人知识库", icon: LibraryBig }
 ];
 
 type ConnectorCapability = { enabled: boolean; status: string; checked_at?: string };
@@ -55,14 +52,13 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
       <nav className="px-3" aria-label="主导航">
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted/70">Research desk</p>
         <div className="space-y-1">
-          {navigation.map(({ href, label, icon: Icon, beta }) => {
+          {navigation.map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === href : pathname.startsWith(href);
             return (
               <Link key={href} href={href} onClick={onNavigate} className={cn("group relative flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-medium transition", active ? "bg-white text-ink shadow-[0_1px_2px_rgba(16,39,61,.05)]" : "text-muted hover:bg-white/60 hover:text-ink")}>
                 {active && <span className="absolute -left-3 h-5 w-0.5 rounded-full bg-signal" />}
                 <Icon className="h-[17px] w-[17px]" strokeWidth={1.8} />
                 <span className="flex-1">{label}</span>
-                {beta && <Badge className="border-amber/20 bg-amber/[0.08] px-1.5 py-0.5 text-[9px] text-amber">BETA</Badge>}
               </Link>
             );
           })}
@@ -108,13 +104,13 @@ export function AppShell({ children }: React.PropsWithChildren) {
           </Dialog.Root>
           <div className="hidden items-center gap-2 text-xs text-muted sm:flex"><span className="font-semibold text-ink">美国市场</span><span>/</span><span>公开信息研究域</span></div>
           <button onClick={() => setSearchOpen(true)} className="flex h-9 w-full max-w-[360px] items-center gap-2 rounded-xl border border-line bg-paper px-3 text-left text-sm text-muted shadow-[0_1px_2px_rgba(16,39,61,.03)] transition hover:border-ink/20">
-            <Search className="h-4 w-4" /><span className="flex-1 truncate">搜索主题、证据或报告</span><kbd className="hidden rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10px] sm:inline">⌘ K</kbd>
+            <Search className="h-4 w-4" /><span className="flex-1 truncate">搜索主题、信息、ETF、对话或资料</span><kbd className="hidden rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[10px] sm:inline">⌘ K</kbd>
           </button>
           <button className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink text-xs font-semibold text-white" aria-label="用户账户">YC</button>
         </div>
       </header>
       <main className="min-h-screen pt-16 lg:ml-[264px]">{children}</main>
-      <Dialog.Root open={searchOpen} onOpenChange={setSearchOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-ink/25 backdrop-blur-sm" /><Dialog.Content className="fixed left-1/2 top-[14vh] z-50 w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 overflow-hidden rounded-2xl border border-line bg-paper shadow-[0_30px_100px_rgba(16,39,61,.2)] outline-none"><Dialog.Title className="sr-only">全局搜索</Dialog.Title><Dialog.Description className="sr-only">搜索主题、证据和报告</Dialog.Description><div className="flex items-center gap-3 border-b border-line px-5"><Search className="h-5 w-5 text-signal" /><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="输入主题、公司、证据或报告名称" className="h-16 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-muted/60" /><Dialog.Close asChild><Button variant="ghost" size="icon"><X className="h-4 w-4" /></Button></Dialog.Close></div><div className="max-h-[55vh] overflow-y-auto p-3">{query.trim().length<2?<p className="p-6 text-center text-sm text-muted">输入至少两个字符开始检索本地研究资产。</p>:searching?<p className="p-6 text-center text-sm text-muted">正在检索…</p>:results.length===0?<p className="p-6 text-center text-sm text-muted">没有匹配结果。可缩短关键词或先运行数据同步。</p>:<ul className="space-y-1">{results.map((item)=><li key={`${item.kind}-${item.id}`}><Dialog.Close asChild><Link href={item.href} className="block rounded-xl px-4 py-3 transition hover:bg-ink/[0.045]"><div className="flex items-center gap-2"><Badge>{item.kind==="theme"?"主题":item.kind==="report"?"报告":"证据"}</Badge><p className="font-medium text-ink">{item.title}</p></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{item.summary}</p></Link></Dialog.Close></li>)}</ul>}</div></Dialog.Content></Dialog.Portal></Dialog.Root>
+      <Dialog.Root open={searchOpen} onOpenChange={setSearchOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-ink/25 backdrop-blur-sm" /><Dialog.Content className="fixed left-1/2 top-[14vh] z-50 w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 overflow-hidden rounded-2xl border border-line bg-paper shadow-[0_30px_100px_rgba(16,39,61,.2)] outline-none"><Dialog.Title className="sr-only">全局搜索</Dialog.Title><Dialog.Description className="sr-only">搜索主题、每日信息、ETF、对话和已授权资料</Dialog.Description><div className="flex items-center gap-3 border-b border-line px-5"><Search className="h-5 w-5 text-signal" /><input autoFocus value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="输入主题、ETF、对话或资料名称" className="h-16 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-muted/60" /><Dialog.Close asChild><Button variant="ghost" size="icon"><X className="h-4 w-4" /></Button></Dialog.Close></div><div className="max-h-[55vh] overflow-y-auto p-3">{query.trim().length<2?<p className="p-6 text-center text-sm text-muted">输入至少两个字符开始检索本地研究资产。</p>:searching?<p className="p-6 text-center text-sm text-muted">正在检索…</p>:results.length===0?<p className="p-6 text-center text-sm text-muted">没有匹配结果。可缩短关键词或先运行数据同步。</p>:<ul className="space-y-1">{results.map((item)=><li key={`${item.kind}-${item.id}`}><Dialog.Close asChild><Link href={item.href} className="block rounded-xl px-4 py-3 transition hover:bg-ink/[0.045]"><div className="flex items-center gap-2"><Badge>{item.kind==="theme"?"主题":item.kind==="knowledge"?"资料":item.kind==="conversation"?"对话":item.kind==="etf"?"ETF":"每日信息"}</Badge><p className="font-medium text-ink">{item.title}</p></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{item.summary}</p></Link></Dialog.Close></li>)}</ul>}</div></Dialog.Content></Dialog.Portal></Dialog.Root>
     </div>
   </InternalAuthGate>;
 }

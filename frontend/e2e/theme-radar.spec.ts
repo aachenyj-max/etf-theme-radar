@@ -44,7 +44,7 @@ test("真实能力契约展示 7/8 来源且不渲染空 logo", async ({ page })
   });
 
   await page.goto("/");
-  await expect(page).toHaveURL("http://127.0.0.1:3000/");
+  await expect(page).toHaveURL(`${test.info().project.use.baseURL as string}/`);
   await expect(page.getByText("数据覆盖 7/8")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("专利公开发现", { exact: true })).toBeVisible();
   await expect(page.getByText("发行人官方持仓", { exact: true })).toBeVisible();

@@ -94,3 +94,5 @@ ETF 预览统一字段：`operating_fee=management_fee+custody_fee`，单位为�
 | `knowledge_shares` / `knowledge_team_memberships` | 成员或团队 ACL 与启用状态。 |
 | `document_chunks` | 当前冻结版本的文本、页码或字符位置和来源类型。 |
 | `knowledge_item_idempotency` / `pending_operations` | 创建重放映射，以及预览/一次性确认的写操作审计。 |
+| `legacy_report_migrations` | 旧个人保存内容到知识库的启动迁移审计；以 `owner_user_id + legacy_report_id` 唯一，记录目标条目、原内容哈希和迁移时间。所有旧内容默认归 `local`；`theme_report` 不写入此表。 |
+| `worker_heartbeats` | 生产外置 `research` 与 `sync_discovery` Worker 的短事务心跳；API 仅只读判断其新鲜度，不在生产内嵌执行 Worker。 |

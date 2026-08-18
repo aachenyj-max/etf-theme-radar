@@ -3,6 +3,11 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from etf_theme_radar.store import EvidenceStore
+from etf_theme_radar.sync_worker import sync_worker_status
+from etf_theme_radar.worker import worker_status
+from etf_theme_radar.models import utcnow
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +29,27 @@ def test_production_compose_keeps_internal_services_off_host_ports() -> None:
     assert '"8001"' in compose and '"3000"' in compose
     assert "ports:" in compose.split("  caddy:", 1)[1]
     assert "profiles: [\"maintenance\"]" in compose
+
+
+def test_production_compose_uses_one_external_worker_and_disables_embedded_workers() -> None:
+    compose = (PROJECT_ROOT / "compose.production.yml").read_text(encoding="utf-8")
+    assert "  worker:" in compose
+    assert "EMBEDDED_WORKERS_ENABLED: \"false\"" in compose
+    assert 'command: ["python", "-m", "etf_theme_radar.production_worker"]' in compose
+    assert "ports:" not in compose.split("  worker:", 1)[1].split("  frontend:", 1)[0]
+
+
+def test_api_can_read_fresh_external_worker_heartbeats(tmp_path: Path) -> None:
+    database = tmp_path / "production-worker.db"
+    store = EvidenceStore(database)
+    try:
+        store.record_worker_heartbeat("research", "external-research", utcnow())
+        store.record_worker_heartbeat("sync_discovery", "external-sync", utcnow())
+    finally:
+        store.close()
+
+    assert worker_status(database)["alive"] is True
+    assert sync_worker_status(database)["alive"] is True
 
 
 def test_production_reverse_proxy_preserves_sse_and_security_headers() -> None:

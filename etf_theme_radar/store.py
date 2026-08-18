@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS knowledge_folders (folder_id TEXT PRIMARY KEY, owner_
 CREATE TABLE IF NOT EXISTS knowledge_items (knowledge_item_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, theme_id TEXT NOT NULL, status TEXT NOT NULL, current_version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
 CREATE TABLE IF NOT EXISTS knowledge_item_versions (knowledge_item_id TEXT NOT NULL, version INTEGER NOT NULL, content_hash TEXT NOT NULL, original_filename TEXT NOT NULL, mime_type TEXT NOT NULL, storage_path TEXT NOT NULL, content_size INTEGER NOT NULL, parse_status TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(knowledge_item_id,version), UNIQUE(storage_path));
 CREATE TABLE IF NOT EXISTS knowledge_item_idempotency (owner_user_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, knowledge_item_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(owner_user_id,idempotency_key));
+CREATE TABLE IF NOT EXISTS legacy_report_migrations (owner_user_id TEXT NOT NULL, legacy_report_id TEXT NOT NULL, knowledge_item_id TEXT NOT NULL, source_content_hash TEXT NOT NULL, migrated_at TEXT NOT NULL, PRIMARY KEY(owner_user_id,legacy_report_id));
+CREATE TABLE IF NOT EXISTS worker_heartbeats (worker_role TEXT PRIMARY KEY, owner TEXT NOT NULL, heartbeat_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS knowledge_folder_entries (folder_id TEXT NOT NULL, knowledge_item_id TEXT NOT NULL, added_at TEXT NOT NULL, PRIMARY KEY(folder_id,knowledge_item_id));
 CREATE TABLE IF NOT EXISTS knowledge_shares (share_id TEXT PRIMARY KEY, knowledge_item_id TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, created_by_user_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT NOT NULL DEFAULT '', UNIQUE(knowledge_item_id,subject_type,subject_id));
 CREATE TABLE IF NOT EXISTS knowledge_team_memberships (team_id TEXT NOT NULL, user_id TEXT NOT NULL, enabled INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(team_id,user_id));
@@ -220,6 +222,21 @@ class EvidenceStore:
 
     def close(self) -> None:
         self.conn.close()
+
+    def record_worker_heartbeat(self, worker_role: str, owner: str, heartbeat_at: str) -> None:
+        self.conn.execute(
+            """INSERT INTO worker_heartbeats(worker_role,owner,heartbeat_at) VALUES (?,?,?)
+            ON CONFLICT(worker_role) DO UPDATE SET owner=excluded.owner,heartbeat_at=excluded.heartbeat_at""",
+            (worker_role, owner, heartbeat_at),
+        )
+        self.conn.commit()
+
+    def worker_heartbeat(self, worker_role: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT owner,heartbeat_at FROM worker_heartbeats WHERE worker_role=?", (worker_role,),
+        ).fetchone()
+        return {"owner": str(row[0]), "heartbeat_at": str(row[1])} if row else None
+
     def save_raw(self, d: RawDocument) -> None:
         self.conn.execute("INSERT OR IGNORE INTO raw_documents VALUES (?,?,?,?,?,?,?,?,?,?)", (d.content_hash,d.source,d.source_url,d.title,d.text,d.source_type,d.published_at,d.retrieved_at,d.parser_version,d.access_note))
     def save_event(self, e: NormalizedEvent) -> None:

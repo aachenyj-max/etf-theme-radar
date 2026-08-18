@@ -39,6 +39,7 @@ class SyncDiscoveryWorker:
         self._thread = threading.Thread(target=self._loop, name="etf-radar-sync-worker", daemon=True)
         self.last_heartbeat_at = ""
         self._last_preview_schedule_check = 0.0
+        self._last_persisted_heartbeat = 0.0
 
     @property
     def is_alive(self) -> bool:
@@ -48,7 +49,26 @@ class SyncDiscoveryWorker:
         if not self._thread.is_alive():
             self._thread.start()
         self.last_heartbeat_at = _timestamp()
+        self._publish_heartbeat(force=True)
         self.wake()
+
+    def _publish_heartbeat(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_persisted_heartbeat < 5.0:
+            return
+        store: EvidenceStore | None = None
+        try:
+            store = EvidenceStore(self.database_path)
+            self.last_heartbeat_at = _timestamp()
+            store.record_worker_heartbeat("sync_discovery", self.owner, self.last_heartbeat_at)
+            self._last_persisted_heartbeat = now
+        except sqlite3.OperationalError:
+            # Keep source synchronization alive when another short SQLite
+            # writer temporarily owns the database.
+            return
+        finally:
+            if store is not None:
+                store.close()
 
     def wake(self) -> None:
         self._wake.set()
@@ -305,6 +325,7 @@ class SyncDiscoveryWorker:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
+                self._publish_heartbeat()
                 self._schedule_etf_preview_if_due()
                 worked = self.run_once()
             except Exception:
@@ -339,4 +360,17 @@ def sync_worker_status(database_path: str | Path) -> dict[str, object]:
     key = str(Path(database_path).resolve())
     with _LOCK:
         worker = _WORKERS.get(key)
-        return {"status": "healthy" if worker and worker.is_alive else "stopped", "alive": bool(worker and worker.is_alive), "owner": worker.owner if worker else "", "heartbeat_at": worker.last_heartbeat_at if worker else ""}
+        if worker and worker.is_alive:
+            return {"status": "healthy", "alive": True, "owner": worker.owner, "heartbeat_at": worker.last_heartbeat_at}
+    store = EvidenceStore(database_path)
+    try:
+        heartbeat = store.worker_heartbeat("sync_discovery")
+    finally:
+        store.close()
+    if heartbeat is None:
+        return {"status": "stopped", "alive": False, "owner": "", "heartbeat_at": ""}
+    try:
+        fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat["heartbeat_at"])).total_seconds() <= 30
+    except ValueError:
+        fresh = False
+    return {"status": "healthy" if fresh else "stopped", "alive": fresh, **heartbeat}
