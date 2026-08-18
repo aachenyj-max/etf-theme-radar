@@ -99,7 +99,18 @@ class KnowledgeBase:
     def create_item(
         self, *, item_id: str, owner_user_id: str, kind: str, title: str, content: bytes,
         filename: str, mime_type: str, theme_id: str, folder_id: str, created_at: str,
+        idempotency_key: str = "",
     ) -> dict:
+        if idempotency_key:
+            replay = self.store.conn.execute(
+                """SELECT knowledge_item_id FROM knowledge_item_idempotency
+                WHERE owner_user_id=? AND idempotency_key=?""",
+                (owner_user_id, idempotency_key),
+            ).fetchone()
+            if replay is not None:
+                item = self._require_item(str(replay[0]), owner_user_id)
+                item["idempotent_replay"] = True
+                return item
         item_id = self._validate_identifier(item_id, "item_id")
         filename = self._validate_filename(filename)
         if not isinstance(content, bytes):
@@ -126,6 +137,12 @@ class KnowledgeBase:
                 "INSERT INTO knowledge_folder_entries (folder_id,knowledge_item_id,added_at) VALUES (?,?,?)",
                 (folder_id, item_id, created_at),
             )
+            if idempotency_key:
+                self.store.conn.execute(
+                    """INSERT INTO knowledge_item_idempotency
+                    (owner_user_id,idempotency_key,knowledge_item_id,created_at) VALUES (?,?,?,?)""",
+                    (owner_user_id, idempotency_key, item_id, created_at),
+                )
             self.store.conn.commit()
         except Exception:
             self.store.conn.rollback()
@@ -133,6 +150,7 @@ class KnowledgeBase:
             raise
         item = self.item(item_id, owner_user_id)
         assert item is not None
+        item["idempotent_replay"] = False
         return item
 
     def replace_content(

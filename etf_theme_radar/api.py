@@ -1,7 +1,7 @@
 from __future__ import annotations
-import ast, asyncio, json, os
+import ast, asyncio, base64, binascii, json, os
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -19,6 +19,8 @@ from .governance import reclassify_store
 from .agent_runtime import capability_status
 from .conversations import ConversationService
 from .ontology import refresh_research_assets
+from .knowledge_base import KnowledgeBase
+from .knowledge_permissions import KnowledgePermissions
 from . import internal_auth
 
 @asynccontextmanager
@@ -50,7 +52,7 @@ async def lifespan(_app: FastAPI):
 
 app=FastAPI(title="ETF Theme Radar",version="0.5.0",description="分析 ETF 格局、跟踪产业动量的主题研究工具；不提供个性化投资或交易建议。",lifespan=lifespan)
 SERVICE_ID = "etf-theme-radar"
-CONTRACT_VERSION = "2026-08-17.v17"
+CONTRACT_VERSION = "2026-08-18.v18"
 CORE_RESEARCH_OBJECTIVE = "analyze_etf_landscape_and_track_industry_momentum"
 AUTO_RESEARCH_SOURCES = [
     "sec", "arxiv", "company_careers", "etf_holdings", "etf_news",
@@ -108,9 +110,30 @@ class ConversationMessageRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=200)
 class ConversationLinksRequest(BaseModel):
     linked_conversation_ids: list[str] = Field(default_factory=list, max_length=100)
+class KnowledgeCreateRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=1, max_length=16_000_000)
+    filename: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=200)
+    theme_id: str = Field(default="", max_length=200)
+    folder_id: str = Field(min_length=1, max_length=120)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+class KnowledgeOperationPreviewRequest(BaseModel):
+    operation_type: Literal["share", "revoke_share", "move", "delete", "restore"]
+    payload: dict = Field(default_factory=dict)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+class KnowledgeOperationConfirmRequest(BaseModel):
+    confirmation_token: str = Field(min_length=1, max_length=200)
 
 def _request_user_id(request: Request) -> str:
     return str(getattr(request.state, "internal_username", "local"))
+
+def _knowledge_files_root() -> Path:
+    return Path(os.getenv("KNOWLEDGE_FILES_DIR", "data/knowledge-files"))
+
+def _knowledge_base(store: EvidenceStore) -> KnowledgeBase:
+    return KnowledgeBase(store, files_root=_knowledge_files_root())
 
 def _is_public_auth_path(path: str) -> bool:
     return path in {"/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
@@ -159,6 +182,96 @@ def auth_logout(response: Response):
 
 @app.get("/health")
 def health(): return {"status":"ok","trading":"disabled","service_id":SERVICE_ID,"contract_version":CONTRACT_VERSION}
+
+@app.get("/api/knowledge")
+def list_knowledge(request: Request):
+    store = _store()
+    try:
+        user_id = _request_user_id(request)
+        permissions = KnowledgePermissions(store)
+        items = permissions.visible_items(user_id)
+        for item in items:
+            share_count = store.conn.execute(
+                """SELECT COUNT(*) FROM knowledge_shares WHERE knowledge_item_id=? AND status='active'""",
+                (item["knowledge_item_id"],),
+            ).fetchone()[0]
+            item["visibility"] = "shared" if share_count else "private"
+        return {"items": items}
+    finally:
+        store.close()
+
+@app.post("/api/knowledge", status_code=201)
+def create_knowledge(request: Request, payload: KnowledgeCreateRequest, response: Response):
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (ValueError, binascii.Error):
+        raise HTTPException(422, "content_base64 不是有效的 Base64 数据")
+    store = _store()
+    try:
+        item = _knowledge_base(store).create_item(
+            item_id=str(uuid4()), owner_user_id=_request_user_id(request), kind=payload.kind,
+            title=payload.title, content=content, filename=payload.filename, mime_type=payload.mime_type,
+            theme_id=payload.theme_id, folder_id=payload.folder_id, created_at=utcnow(),
+            idempotency_key=payload.idempotency_key,
+        )
+        item["visibility"] = "private"
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    finally:
+        store.close()
+    if item.pop("idempotent_replay", False):
+        response.status_code = 200
+    return item
+
+@app.get("/api/knowledge/{item_id}")
+def get_knowledge(item_id: str, request: Request):
+    store = _store()
+    try:
+        item = KnowledgePermissions(store).item_for_user(item_id, _request_user_id(request))
+        if item is None:
+            raise HTTPException(404, "知识条目不存在或无权访问")
+        return item
+    finally:
+        store.close()
+
+@app.post("/api/knowledge/{item_id}/operations/preview", status_code=201)
+def preview_knowledge_operation(
+    item_id: str, request: Request, payload: KnowledgeOperationPreviewRequest,
+):
+    store = _store()
+    try:
+        now = datetime.now(timezone.utc)
+        try:
+            return KnowledgePermissions(store).preview_operation(
+                operation_id=str(uuid4()), owner_user_id=_request_user_id(request),
+                operation_type=payload.operation_type, item_id=item_id, payload=payload.payload,
+                idempotency_key=payload.idempotency_key, confirmation_token=str(uuid4()),
+                created_at=now.isoformat(), expires_at=(now + timedelta(minutes=15)).isoformat(),
+            )
+        except KeyError:
+            raise HTTPException(404, "知识条目不存在或无权操作")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    finally:
+        store.close()
+
+@app.post("/api/knowledge/operations/{operation_id}/confirm")
+def confirm_knowledge_operation(
+    operation_id: str, request: Request, payload: KnowledgeOperationConfirmRequest,
+):
+    store = _store()
+    try:
+        try:
+            return KnowledgePermissions(store).confirm_operation(
+                operation_id, _request_user_id(request), payload.confirmation_token,
+                confirmed_at=utcnow(),
+            )
+        except KeyError:
+            raise HTTPException(404, "待确认操作不存在或无权访问")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+    finally:
+        store.close()
 
 @app.post("/api/conversations", status_code=201)
 def create_conversation(request: Request, payload: ConversationCreateRequest):

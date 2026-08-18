@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import subprocess
 import sys
 import time
@@ -14,6 +15,42 @@ from etf_theme_radar.store import EvidenceStore
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
+
+
+def test_knowledge_api_is_private_by_default_and_confirms_share_before_write(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "knowledge-api.db"
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    monkeypatch.setenv("KNOWLEDGE_FILES_DIR", str(tmp_path / "knowledge-files"))
+    monkeypatch.setenv("STARTUP_SYNC_ENABLED", "false")
+    payload = {
+        "kind": "note", "title": "内部机器人笔记", "content_base64": base64.b64encode(b"hardware notes").decode(),
+        "filename": "notes.txt", "mime_type": "text/plain", "theme_id": "robotics",
+        "folder_id": "private", "idempotency_key": "create-knowledge-1",
+    }
+    with TestClient(app) as client:
+        assert client.get("/health").json()["contract_version"] == "2026-08-18.v18"
+        created = client.post("/api/knowledge", json=payload)
+        replay = client.post("/api/knowledge", json=payload)
+        assert created.status_code == 201
+        assert replay.status_code == 200
+        item_id = created.json()["knowledge_item_id"]
+        assert replay.json()["knowledge_item_id"] == item_id
+        assert client.get("/api/knowledge").json()["items"][0]["visibility"] == "private"
+
+        preview = client.post(f"/api/knowledge/{item_id}/operations/preview", json={
+            "operation_type": "share", "payload": {"subject_type": "user", "subject_id": "user-b"},
+            "idempotency_key": "share-knowledge-1",
+        })
+        assert preview.status_code == 201
+        assert preview.json()["status"] == "pending_confirmation"
+        confirmation = client.post(f"/api/knowledge/operations/{preview.json()['operation_id']}/confirm", json={
+            "confirmation_token": preview.json()["confirmation_token"],
+        })
+        assert confirmation.status_code == 200
+        assert confirmation.json()["status"] == "completed"
+        assert client.post(f"/api/knowledge/operations/{preview.json()['operation_id']}/confirm", json={
+            "confirmation_token": preview.json()["confirmation_token"],
+        }).status_code == 409
 
 
 def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -> None:
@@ -33,7 +70,7 @@ def test_fastapi_research_and_capability_contract(tmp_path: Path, monkeypatch) -
         assert payload["output_types"] == {"theme_report": True}
         assert payload["core_capability"]["name"] == "分析 ETF 格局、跟踪产业动量"
         assert payload["service"]["id"] == "etf-theme-radar"
-        assert payload["service"]["contract_version"] == "2026-08-17.v17"
+        assert payload["service"]["contract_version"] == "2026-08-18.v18"
         assert payload["llm"]["concurrency"]["lane_reservations"] == {
             "interactive": 10, "background": 2,
         }
@@ -190,7 +227,7 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     stderr = result.stderr.decode("utf-8", errors="replace")
     assert result.returncode == 0, stderr
     snapshot = json.loads(result.stdout.decode("utf-8"))
-    assert snapshot["contract_version"] == "2026-08-17.v17"
+    assert snapshot["contract_version"] == "2026-08-18.v18"
     assert "research_runs" in snapshot["database_tables"]
     assert "report_versions" in snapshot["database_tables"]
     assert "content_quality_results" in snapshot["database_tables"]
@@ -201,6 +238,10 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
     assert "conversations" in snapshot["database_tables"]
     assert "conversation_messages" in snapshot["database_tables"]
     assert "conversation_links" in snapshot["database_tables"]
+    assert "knowledge_items" in snapshot["database_tables"]
+    assert "knowledge_item_versions" in snapshot["database_tables"]
+    assert "knowledge_shares" in snapshot["database_tables"]
+    assert "document_chunks" in snapshot["database_tables"]
     assert snapshot["status_enums"]["content_quality"] == [
         "publishable", "needs_enrichment", "rejected",
     ]
@@ -252,6 +293,11 @@ def test_contract_snapshot_exports_runtime_and_frontend_dependencies() -> None:
         set(item) for item in snapshot["api_routes"]
     ]
     assert {"PUT", "/api/conversations/{conversation_id}/links"} in [
+        set(item) for item in snapshot["api_routes"]
+    ]
+    assert {"GET", "/api/knowledge"} in [set(item) for item in snapshot["api_routes"]]
+    assert {"POST", "/api/knowledge"} in [set(item) for item in snapshot["api_routes"]]
+    assert {"POST", "/api/knowledge/{item_id}/operations/preview"} in [
         set(item) for item in snapshot["api_routes"]
     ]
     report_gateway = snapshot["frontend_gateway_dependencies"]["report-detail-gateway.ts"]
