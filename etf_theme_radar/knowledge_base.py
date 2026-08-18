@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 
 from .store import EvidenceStore
@@ -212,3 +215,110 @@ class KnowledgeBase:
             return None
         content = path.read_bytes()
         return content if self._hash(content) == item["content_hash"] else None
+
+    @staticmethod
+    def _html_text(content: str) -> str:
+        class TextExtractor(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.parts: list[str] = []
+
+            def handle_data(self, data: str) -> None:
+                self.parts.append(data)
+
+        parser = TextExtractor()
+        parser.feed(content)
+        return "".join(parser.parts)
+
+    @staticmethod
+    def _document_pages(content: bytes, mime_type: str) -> list[tuple[int | None, str]]:
+        normalized = mime_type.casefold().split(";", 1)[0].strip()
+        if normalized in {"text/plain", "text/markdown", "text/csv"}:
+            return [
+                (index, page) for index, page in enumerate(content.decode("utf-8").split("\f"), start=1)
+            ]
+        if normalized == "application/json":
+            parsed = json.loads(content.decode("utf-8"))
+            return [(None, json.dumps(parsed, ensure_ascii=False, sort_keys=True))]
+        if normalized in {"text/html", "application/xhtml+xml"}:
+            return [(None, KnowledgeBase._html_text(content.decode("utf-8")))]
+        if normalized == "application/pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(content))
+            return [(index, page.extract_text() or "") for index, page in enumerate(reader.pages, start=1)]
+        if normalized == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            from docx import Document
+
+            document = Document(BytesIO(content))
+            return [(None, "\n".join(paragraph.text for paragraph in document.paragraphs))]
+        raise ValueError(f"unsupported MIME type: {mime_type}")
+
+    def parse_current_version(
+        self, item_id: str, owner_user_id: str, *, chunk_size: int = 1200, overlap: int = 160,
+    ) -> list[dict]:
+        if chunk_size < 1 or overlap < 0 or overlap >= chunk_size:
+            raise ValueError("chunk_size must exceed non-negative overlap")
+        item = self._require_item(item_id, owner_user_id)
+        content = self.read_content(item_id, owner_user_id)
+        if content is None:
+            raise ValueError("knowledge item content is unavailable")
+        version = int(item["current_version"])
+        existing = self.store.conn.execute(
+            """SELECT chunk_id,chunk_index,text,page_number,char_start,char_end,source_type
+            FROM document_chunks WHERE knowledge_item_id=? AND version=? ORDER BY chunk_index""",
+            (item_id, version),
+        ).fetchall()
+        if existing:
+            keys = ("chunk_id", "chunk_index", "text", "page_number", "char_start", "char_end", "source_type")
+            return [{**dict(zip(keys, row)), "version": version} for row in existing]
+        try:
+            pages = self._document_pages(content, str(item["mime_type"]))
+        except Exception:
+            self.store.conn.execute(
+                """UPDATE knowledge_item_versions SET parse_status='failed'
+                WHERE knowledge_item_id=? AND version=?""",
+                (item_id, version),
+            )
+            self.store.conn.commit()
+            raise
+        chunks: list[dict] = []
+        document_offset = 0
+        for page_number, page_text in pages:
+            if not page_text:
+                document_offset += 1
+                continue
+            start = 0
+            while start < len(page_text):
+                end = min(len(page_text), start + chunk_size)
+                chunks.append({
+                    "chunk_id": f"chunk:{item_id}:{version}:{len(chunks)}",
+                    "chunk_index": len(chunks), "text": page_text[start:end],
+                    "page_number": page_number, "char_start": document_offset + start,
+                    "char_end": document_offset + end, "source_type": item["kind"], "version": version,
+                })
+                if end == len(page_text):
+                    break
+                start = end - overlap
+            document_offset += len(page_text) + 1
+        try:
+            self.store.conn.execute("BEGIN IMMEDIATE")
+            for chunk in chunks:
+                self.store.conn.execute(
+                    """INSERT INTO document_chunks
+                    (chunk_id,knowledge_item_id,version,chunk_index,text,page_number,char_start,char_end,source_type,created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (chunk["chunk_id"], item_id, version, chunk["chunk_index"], chunk["text"],
+                     chunk["page_number"], chunk["char_start"], chunk["char_end"], chunk["source_type"],
+                     item["updated_at"]),
+                )
+            self.store.conn.execute(
+                """UPDATE knowledge_item_versions SET parse_status='parsed'
+                WHERE knowledge_item_id=? AND version=?""",
+                (item_id, version),
+            )
+            self.store.conn.commit()
+        except Exception:
+            self.store.conn.rollback()
+            raise
+        return chunks

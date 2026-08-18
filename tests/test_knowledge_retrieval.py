@@ -6,6 +6,7 @@ from pathlib import Path
 from etf_theme_radar.knowledge_base import KnowledgeBase
 from etf_theme_radar.knowledge_permissions import KnowledgePermissions
 from etf_theme_radar.knowledge_retrieval import KnowledgeRetrieval
+from etf_theme_radar.context_builder import build_research_context
 from etf_theme_radar.store import EvidenceStore
 
 
@@ -92,5 +93,43 @@ def test_retrieval_orders_equally_relevant_authorized_chunks_by_newest_first(tmp
         )
 
         assert [item["knowledge_item_id"] for item in result["items"]] == ["newer-item", "older-item"]
+    finally:
+        store.close()
+
+
+def test_authorized_parsed_knowledge_enters_context_after_frozen_etf_data(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "context.db")
+    library = KnowledgeBase(store, files_root=tmp_path / "knowledge-files")
+    permissions = KnowledgePermissions(store)
+    try:
+        library.create_item(
+            item_id="context-item", owner_user_id="user-a", kind="etf_material",
+            title="内部 ETF 材料", content=b"robotics hardware coverage", filename="etf.txt",
+            mime_type="text/plain", theme_id="robotics", folder_id="folder-a", created_at=NOW,
+        )
+        library.parse_current_version("context-item", "user-a", chunk_size=100, overlap=0)
+        permissions.preview_operation(
+            operation_id="share-context", owner_user_id="user-a", operation_type="share",
+            item_id="context-item", payload={"subject_type": "user", "subject_id": "user-b"},
+            idempotency_key="share-context-user-b", confirmation_token="confirm-context",
+            created_at=NOW, expires_at="2026-08-19T00:00:00+00:00",
+        )
+        permissions.confirm_operation("share-context", "user-a", "confirm-context", confirmed_at=NOW)
+
+        knowledge = KnowledgeRetrieval(store).for_research_context(
+            user_id="user-b", theme_id="robotics", query="hardware", token_budget=20,
+        )
+        context = build_research_context(
+            user_id="user-b", conversation_id="conversation-b", token_budget=100,
+            theme_definition={"id": "theme", "token_count": 1},
+            evidence=[{"id": "evidence", "token_count": 1}],
+            etf_snapshots=[{"id": "etf", "token_count": 1}], knowledge=knowledge,
+        )
+
+        assert [layer["kind"] for layer in context["layers"]] == [
+            "theme_definition", "evidence", "etf_snapshots", "knowledge",
+        ]
+        assert context["layers"][-1]["items"][0]["internal_material"] is True
+        assert context["layers"][-1]["items"][0]["source_type"] == "etf_material"
     finally:
         store.close()

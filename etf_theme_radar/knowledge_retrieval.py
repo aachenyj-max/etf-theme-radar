@@ -38,7 +38,15 @@ class KnowledgeRetrieval:
                 "knowledge_item_id": item["knowledge_item_id"], "version": item["version"],
                 "title": item["title"], "text": item["text"], "page_number": item["page_number"],
                 "char_start": item["char_start"], "char_end": item["char_end"],
-                "source_type": item["source_type"], "internal_material": True, "token_count": cost,
+                "source_type": item["source_type"], "internal_material": True,
+                "allowed_user_ids": [user_id], "token_count": cost,
             })
             used += cost
         return {"items": selected, "estimated_tokens": used, "token_budget": token_budget}
+
+    def for_research_context(
+        self, *, user_id: str, theme_id: str, query: str, token_budget: int,
+    ) -> list[dict]:
+        return self.search(
+            user_id=user_id, query=query, theme_id=theme_id, token_budget=token_budget,
+        )["items"]
