@@ -142,3 +142,7 @@ ETF 预览是独立采集的只读产品目录。`SyncDiscoveryWorker` 以 `etf-
 | `theme-radar-gateway.ts` | `/api/themes`、`/api/theme-candidates/{candidate_id}/review` |
 
 `app-shell.tsx`、`source-intelligence-wall.tsx`、`system-workspace.tsx` 等组件还直接读取 `/api/capabilities`、`/api/search` 和同步状态；这些属于现有组件依赖，不应被误认为可移除的未使用路由。
+
+## 个人知识库与权限
+
+`knowledge_items` 与不可变 `knowledge_item_versions` 保存条目、哈希和受控相对文件路径；`knowledge_folders`、`knowledge_folder_entries`、`knowledge_shares`、`knowledge_team_memberships` 和 `document_chunks` 保存归档、授权与可定位片段。`KnowledgePermissions` 的 SQL 谓词在列表、单条读取、检索和上下文预算前执行；`KnowledgeRetrieval` 仅返回标记为 `internal_material` 的当前授权片段。`pending_operations` 将共享、移动、删除与恢复分为预览和单次确认，撤销授权在提交后立即从后续检索消失。

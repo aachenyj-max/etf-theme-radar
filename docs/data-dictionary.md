@@ -84,3 +84,13 @@ ETF 预览统一字段：`operating_fee=management_fee+custody_fee`，单位为�
 | `tests/fixtures/empty_etf_snapshot.json` | 天天基金网与 yfinance 均无可用产品 | 验证空结果拒写且不覆盖最后成功快照 |
 
 `title_equals_summary` 与持仓导航污染在本阶段只做基线冻结，不宣称质量问题已修复。ETF 失败样本则继续验证现有安全边界：单 ticker 失败不阻断其他产品，两源均空时研究运行失败并保留最后成功快照。
+
+## 个人知识库
+
+| 表 | 作用 |
+|---|---|
+| `knowledge_items` / `knowledge_item_versions` | 所有者、状态、当前版本、内容哈希、MIME、受控路径和解析状态；删除为软删除。 |
+| `knowledge_folders` / `knowledge_folder_entries` | 用户拥有的文件夹与条目归档。 |
+| `knowledge_shares` / `knowledge_team_memberships` | 成员或团队 ACL 与启用状态。 |
+| `document_chunks` | 当前冻结版本的文本、页码或字符位置和来源类型。 |
+| `knowledge_item_idempotency` / `pending_operations` | 创建重放映射，以及预览/一次性确认的写操作审计。 |

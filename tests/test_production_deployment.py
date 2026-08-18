@@ -61,3 +61,27 @@ def test_restore_rejects_an_unconfirmed_target(tmp_path: Path) -> None:
         assert "confirm-target" in str(error)
     else:
         raise AssertionError("restore must require an exact target confirmation")
+
+
+def test_backup_and_restore_include_versioned_knowledge_files(tmp_path: Path) -> None:
+    backup_tool = _load_tool("backup_sqlite.py")
+    restore_tool = _load_tool("restore_sqlite.py")
+    source = tmp_path / "source.db"
+    knowledge = tmp_path / "knowledge-files"
+    (knowledge / "item-1").mkdir(parents=True)
+    stored = knowledge / "item-1" / "v000001.bin"
+    stored.write_bytes(b"versioned private material")
+    import sqlite3
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE versions (content_hash TEXT)")
+        connection.execute("INSERT INTO versions VALUES ('preserved')")
+    backup = backup_tool.create_backup(source, tmp_path / "backups", knowledge_dir=knowledge)
+    target = tmp_path / "restored.db"
+    restored_files = tmp_path / "restored-files"
+    restore_tool.restore_backup(
+        backup, target, str(target.resolve()),
+        knowledge_backup_dir=backup.with_suffix(".knowledge"), knowledge_target_dir=restored_files,
+    )
+    assert (restored_files / "item-1" / "v000001.bin").read_bytes() == b"versioned private material"
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT content_hash FROM versions").fetchone() == ("preserved",)

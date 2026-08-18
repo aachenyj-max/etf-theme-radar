@@ -140,6 +140,8 @@ Playwright 会用专用 `RADAR_E2E=1` Next 进程避免 Windows 工作区的开�
 - `npm.cmd run test:e2e`：通过 Playwright + 本机 Edge 验证主题复核、报告退回、重跑、通过和归档。
 - `python -m etf_theme_radar.cli backfill-evidence-summaries --db data/radar.db`：预览旧固定证据摘要的升级范围；增加 `--apply` 后以不可变 `V+1` 版本写入，旧版本与引用保持不变。
 - `python -m etf_theme_radar.cli backfill-evidence-extractions --db data/radar-copy.db --apply --limit 500 --resume-after <event_id>`：仅在复制数据库或维护窗口中按恢复点重建历史完整性与事实结果。
+- `GET/POST /api/knowledge`：读取当前用户已授权的个人资料或创建默认私有条目；共享、移动、删除与恢复必须先预览，再以一次性确认令牌完成。
+- `python tools/backup_sqlite.py --source data/radar.db --destination-dir <dir> --knowledge-dir data/knowledge-files`：创建 SQLite 与受控知识文件的哈希清单备份。
 
 当前可靠性边界：Worker 是本地单进程实现，不是分布式队列；同步连接器、LLM 或浏览器已经进入同步调用后只能在返回时响应取消。上游不支持幂等键时，进程在外部调用成功但本地提交前崩溃仍可能在 lease 过期后重试。API 仍只允许绑定本机，不具备公网认证、授权或 CSRF 防护。ETF 流动性、指数规则和美国交易所主表尚未接入时不会推断结论。
 

@@ -122,3 +122,7 @@ python -m etf_theme_radar.cli backfill-evidence-summaries --db data/radar.db
 ```
 
 确认后显式增加 `--apply`。升级会追加不可变报告版本并原子提升资产指针，不修改旧版本；重复执行保持幂等。命令只使用报告中已经冻结的证据，不重新访问来源网页。失败报告会保留原版本并在 JSON 结果的 `failed` 中列出。
+
+## 个人知识库备份与恢复
+
+知识文件必须位于本地 `KNOWLEDGE_FILES_DIR`。维护窗口先停止 API，再执行 `backup_sqlite.py --source <db> --destination-dir <backup> --knowledge-dir <files>`；元数据 JSON 会记录数据库和每个知识文件的 SHA-256。恢复必须使用独立、空的知识目录，并同时给出 SQLite 的精确 `--confirm-target`、`--knowledge-backup-dir` 和 `--knowledge-target-dir`。恢复后验证活动版本的文件哈希、版本、ACL 行和分块数；不得对生产目标做首次恢复演练。
