@@ -157,7 +157,11 @@ class SyncDiscoveryWorker:
         store = EvidenceStore(self.database_path)
         results: dict = {}
         connectors = configured_connectors(Path("data/cache"))
-        until = date.today()
+        daily_key = str(run.get("idempotency_key") or "")
+        if daily_key.startswith("daily:"):
+            until = date.fromisoformat(daily_key.removeprefix("daily:")[:10])
+        else:
+            until = date.today()
         try:
             for index, connector in enumerate(connectors):
                 current = store.sync_run(run["sync_run_id"])

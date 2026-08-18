@@ -34,6 +34,7 @@ def test_knowledge_api_is_private_by_default_and_confirms_share_before_write(tmp
         assert created.status_code == 201
         assert replay.status_code == 200
         item_id = created.json()["knowledge_item_id"]
+        assert created.json()["parse_status"] == "parsed"
         assert replay.json()["knowledge_item_id"] == item_id
         assert client.get("/api/knowledge").json()["items"][0]["visibility"] == "private"
 

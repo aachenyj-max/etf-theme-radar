@@ -99,7 +99,7 @@ python -m etf_theme_radar.cli etf-preview-audit --db data/radar.db
 
 `GET /api/dashboard` 只读取已持久化的 `daily_briefing_assets`，可用 `theme`、`industry_chain` 和 `source` 参数定位事实卡。空首页先检查当天 `daily:*` 同步是否已完成，再检查 `content_quality_results` 是否存在 `publishable` 记录；不要通过访问首页触发生成。`exceptions` 中的质量状态和 `degraded`/`disabled` 来源仅用于排查，不代表这些未通过质量门的信息已进入简报。
 
-主题详情的时间线来自 `GET /api/themes` 的 `timeline`，覆盖缺口来自其 `coverageGaps`；两者均只使用 `publishable` 证据和已持久化单元。部署 v17 后，启动器会拒绝复用未返回 v17 的旧服务。
+主题详情的时间线来自 `GET /api/themes` 的 `timeline`，覆盖缺口来自其 `coverageGaps`；两者均只使用 `publishable` 证据和已持久化单元。部署 v18 后，启动器会拒绝复用未返回 `2026-08-18.v18` 的旧服务。
 
 主题详情和 ETF 的附加 tabs 只读已有快照。若 SEC 新 ETF 或持仓变化显示 `not_assessed`，应检查相应来源同步、截至日期与验证状态；不得通过手工填写或把产品预览字段映射为持仓变化来消除空状态。
 

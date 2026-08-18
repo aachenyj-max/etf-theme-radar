@@ -208,12 +208,22 @@ def create_knowledge(request: Request, payload: KnowledgeCreateRequest, response
         raise HTTPException(422, "content_base64 不是有效的 Base64 数据")
     store = _store()
     try:
-        item = _knowledge_base(store).create_item(
+        library = _knowledge_base(store)
+        item = library.create_item(
             item_id=str(uuid4()), owner_user_id=_request_user_id(request), kind=payload.kind,
             title=payload.title, content=content, filename=payload.filename, mime_type=payload.mime_type,
             theme_id=payload.theme_id, folder_id=payload.folder_id, created_at=utcnow(),
             idempotency_key=payload.idempotency_key,
         )
+        idempotent_replay = bool(item.get("idempotent_replay"))
+        if not idempotent_replay:
+            try:
+                library.parse_current_version(item["knowledge_item_id"], _request_user_id(request))
+            except Exception:
+                # The original, versioned file remains available for later re-extraction.
+                pass
+            item = library.item(item["knowledge_item_id"], _request_user_id(request)) or item
+        item["idempotent_replay"] = idempotent_replay
         item["visibility"] = "private"
     except ValueError as exc:
         raise HTTPException(422, str(exc))
